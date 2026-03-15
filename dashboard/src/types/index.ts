@@ -2,6 +2,16 @@ export interface VaultConfig {
   name: string;
   threshold: number;
   signer_count: number;
+  tx_fee_amount?: bigint;
+  tx_fee_token?: string;
+  fee_recipient?: string;
+}
+
+export type Role = 'Admin' | 'Executor' | 'Viewer';
+
+export interface SignerWithRole {
+  address: string;
+  role: Role;
 }
 
 export interface Proposal {
@@ -20,6 +30,16 @@ export interface TokenBalance {
   symbol: string;
   balance: bigint;
   decimals: number;
+  name?: string;
+  icon?: string;
 }
 
-export type ActiveView = 'home' | 'assets' | 'transactions' | 'members' | 'settings';
+export interface TokenInfo {
+  address: string;
+  symbol: string;
+  name: string;
+  decimals: number;
+  icon?: string;
+}
+
+export type ActiveView = 'home' | 'assets' | 'transactions' | 'members' | 'settings' | 'contacts' | 'admin';
