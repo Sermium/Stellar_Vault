@@ -1,11 +1,10 @@
 [package]
-name = "hello-world"
-version = "0.0.0"
+name = "stellar-vault-factory"
+version = "0.0.1"
 edition = "2021"
-publish = false
 
 [lib]
-crate-type = ["lib", "cdylib"]
+crate-type = ["cdylib"]
 doctest = false
 
 [dependencies]
@@ -13,3 +12,6 @@ soroban-sdk = { workspace = true }
 
 [dev-dependencies]
 soroban-sdk = { workspace = true, features = ["testutils"] }
+
+[features]
+testutils = ["soroban-sdk/testutils"]
