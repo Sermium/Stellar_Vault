@@ -38,9 +38,11 @@ export const ContactBookModal: React.FC<ContactBookModalProps> = ({
     }
 
     saveContact({
+      id: Date.now().toString(),
       address: newAddress.trim(),
       name: newName.trim(),
       createdAt: Date.now(),
+      updatedAt: Date.now(),
     });
 
     setContacts(getContacts());

@@ -40,6 +40,7 @@ export interface TokenInfo {
   name: string;
   decimals: number;
   icon?: string;
+  issuer?: string;
 }
 
 export type ActiveView = 'home' | 'assets' | 'transactions' | 'members' | 'settings' | 'contacts' | 'admin';

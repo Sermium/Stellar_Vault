@@ -1,82 +1,170 @@
 import React, { useState } from 'react';
-import { XIcon } from '../icons';
-import { NATIVE_TOKEN } from '../../config/constants';
+import { SUPPORTED_TOKENS } from '../../config';
+import { getCustomTokens } from '../../services/tokensService';
 
 interface NewTransactionModalProps {
-  loading: boolean;
+  isOpen: boolean;
   onClose: () => void;
-  onSubmit: (token: string, to: string, amount: string) => void;
+  onSubmit: (token: string, recipient: string, amount: bigint) => Promise<void>;
 }
 
 export const NewTransactionModal: React.FC<NewTransactionModalProps> = ({
-  loading,
+  isOpen,
   onClose,
   onSubmit,
 }) => {
-  const [token, setToken] = useState(NATIVE_TOKEN);
-  const [to, setTo] = useState('');
+  const [selectedToken, setSelectedToken] = useState(SUPPORTED_TOKENS[0]?.address || '');
+  const [recipient, setRecipient] = useState('');
   const [amount, setAmount] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
 
-  const handleSubmit = () => {
-    onSubmit(token, to, amount);
+  // Combine supported and custom tokens
+  const allTokens = [
+    ...SUPPORTED_TOKENS,
+    ...getCustomTokens().map(t => ({
+      address: t.address,
+      symbol: t.symbol,
+      name: t.name,
+      decimals: t.decimals,
+      icon: t.icon,
+    }))
+  ];
+
+  const selectedTokenInfo = allTokens.find(t => t.address === selectedToken);
+
+  const resetForm = () => {
+    setSelectedToken(SUPPORTED_TOKENS[0]?.address || '');
+    setRecipient('');
+    setAmount('');
+    setError('');
   };
 
+  const handleClose = () => {
+    resetForm();
+    onClose();
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError('');
+
+    // Validate recipient
+    if (!recipient.trim()) {
+      setError('Recipient address is required');
+      return;
+    }
+
+    if (!recipient.startsWith('G') || recipient.length !== 56) {
+      setError('Invalid recipient address (must start with G and be 56 characters)');
+      return;
+    }
+
+    // Validate amount
+    const amountNum = parseFloat(amount);
+    if (isNaN(amountNum) || amountNum <= 0) {
+      setError('Please enter a valid amount');
+      return;
+    }
+
+    // Convert to stroops/smallest unit
+    const decimals = selectedTokenInfo?.decimals || 7;
+    const amountInStroops = BigInt(Math.floor(amountNum * Math.pow(10, decimals)));
+
+    setLoading(true);
+    try {
+      await onSubmit(selectedToken, recipient.trim(), amountInStroops);
+      handleClose();
+    } catch (err: any) {
+      setError(err.message || 'Failed to create proposal');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  if (!isOpen) return null;
+
   return (
-    <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-      <div className="bg-[#0d0e12] border border-gray-700 rounded-2xl w-full max-w-lg">
-        <div className="p-6 border-b border-gray-700 flex items-center justify-between">
-          <h2 className="text-xl font-semibold">New Transaction</h2>
-          <button onClick={onClose} className="p-2 hover:bg-gray-800 rounded-lg">
-            <XIcon />
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+      <div className="bg-slate-800 rounded-xl max-w-md w-full p-6">
+        <div className="flex items-center justify-between mb-6">
+          <h2 className="text-xl font-semibold text-white">New Transaction</h2>
+          <button
+            onClick={handleClose}
+            className="text-slate-400 hover:text-white transition-colors"
+          >
+            <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+            </svg>
           </button>
         </div>
-        <div className="p-6 space-y-4">
+
+        <form onSubmit={handleSubmit} className="space-y-4">
+          {/* Token Selection */}
           <div>
-            <label className="block text-sm text-gray-400 mb-2">Token</label>
-            <input
-              type="text"
-              value={token}
-              onChange={(e) => setToken(e.target.value)}
-              className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded-xl text-white focus:border-cyan-500 focus:outline-none font-mono text-sm"
-            />
+            <label className="block text-sm text-slate-400 mb-2">Token</label>
+            <select
+              value={selectedToken}
+              onChange={(e) => setSelectedToken(e.target.value)}
+              className="w-full px-4 py-3 bg-slate-700 border border-slate-600 rounded-lg text-white focus:outline-none focus:border-purple-500"
+            >
+              {allTokens.map((token) => (
+                <option key={token.address} value={token.address}>
+                  {token.symbol} - {token.name}
+                </option>
+              ))}
+            </select>
           </div>
+
+          {/* Recipient */}
           <div>
-            <label className="block text-sm text-gray-400 mb-2">Recipient Address</label>
+            <label className="block text-sm text-slate-400 mb-2">Recipient Address</label>
             <input
               type="text"
-              value={to}
-              onChange={(e) => setTo(e.target.value)}
+              value={recipient}
+              onChange={(e) => setRecipient(e.target.value)}
               placeholder="G..."
-              className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded-xl text-white focus:border-cyan-500 focus:outline-none font-mono"
+              className="w-full px-4 py-3 bg-slate-700 border border-slate-600 rounded-lg text-white placeholder-slate-500 focus:outline-none focus:border-purple-500"
             />
           </div>
+
+          {/* Amount */}
           <div>
-            <label className="block text-sm text-gray-400 mb-2">Amount (stroops)</label>
+            <label className="block text-sm text-slate-400 mb-2">
+              Amount ({selectedTokenInfo?.symbol || 'Token'})
+            </label>
             <input
-              type="text"
+              type="number"
               value={amount}
               onChange={(e) => setAmount(e.target.value)}
-              placeholder="10000000"
-              className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded-xl text-white focus:border-cyan-500 focus:outline-none"
+              placeholder="0.00"
+              step="any"
+              min="0"
+              className="w-full px-4 py-3 bg-slate-700 border border-slate-600 rounded-lg text-white placeholder-slate-500 focus:outline-none focus:border-purple-500"
             />
-            <p className="text-xs text-gray-500 mt-1">1 XLM = 10,000,000 stroops</p>
           </div>
-        </div>
-        <div className="p-6 border-t border-gray-700 flex gap-3">
-          <button
-            onClick={onClose}
-            className="flex-1 px-4 py-3 bg-gray-800 hover:bg-gray-700 rounded-xl transition"
-          >
-            Cancel
-          </button>
-          <button
-            onClick={handleSubmit}
-            disabled={loading || !to || !amount}
-            className="flex-1 px-4 py-3 bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 disabled:opacity-50 rounded-xl transition font-medium"
-          >
-            {loading ? 'Creating...' : 'Create Transaction'}
-          </button>
-        </div>
+
+          {error && (
+            <p className="text-red-400 text-sm">{error}</p>
+          )}
+
+          <div className="flex gap-3 pt-2">
+            <button
+              type="button"
+              onClick={handleClose}
+              className="flex-1 py-3 bg-slate-700 hover:bg-slate-600 text-white rounded-lg font-medium transition-colors"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={loading || !recipient || !amount}
+              className="flex-1 py-3 bg-purple-600 hover:bg-purple-700 disabled:bg-slate-600 disabled:cursor-not-allowed text-white rounded-lg font-medium transition-colors"
+            >
+              {loading ? 'Creating...' : 'Create Proposal'}
+            </button>
+          </div>
+        </form>
       </div>
     </div>
   );

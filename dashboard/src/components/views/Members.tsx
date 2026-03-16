@@ -1,8 +1,8 @@
 import React, { useState } from 'react';
-import { CopyIcon, ShieldIcon } from '../icons';
+import { CopyIcon } from '../icons';
 import { VaultConfig, Role, SignerWithRole } from '../../types';
-import { truncateAddress } from '../../lib/stellar';
-import { getContactName } from '../../services/contactsService';
+import { truncateAddress } from '../../lib/utils';
+import { getContacts, saveContact, Contact, getContactByAddress } from '../../services/contactsService';
 
 interface MembersProps {
   signers: string[];
@@ -11,10 +11,6 @@ interface MembersProps {
   publicKey: string | null;
   userRole?: Role;
   onCopy: (text: string) => void;
-  onAddSigner?: (address: string, role: Role) => Promise<void>;
-  onRemoveSigner?: (address: string) => Promise<void>;
-  onSetRole?: (address: string, role: Role) => Promise<void>;
-  onSetThreshold?: (threshold: number) => Promise<void>;
 }
 
 export const Members: React.FC<MembersProps> = ({
@@ -24,26 +20,19 @@ export const Members: React.FC<MembersProps> = ({
   publicKey,
   userRole,
   onCopy,
-  onAddSigner,
-  onRemoveSigner,
-  onSetRole,
-  onSetThreshold,
 }) => {
-  const [showAddModal, setShowAddModal] = useState(false);
-  const [showThresholdModal, setShowThresholdModal] = useState(false);
-  const [newSignerAddress, setNewSignerAddress] = useState('');
-  const [newSignerRole, setNewSignerRole] = useState<Role>('Executor');
-  const [newThreshold, setNewThreshold] = useState(vaultConfig?.threshold || 1);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
-  const [editingRole, setEditingRole] = useState<string | null>(null);
-
-  const isAdmin = userRole === 'Admin';
-  const canManageMembers = isAdmin && onAddSigner && onRemoveSigner && onSetRole;
+  const [searchQuery, setSearchQuery] = useState('');
+  const [contacts, setContacts] = useState<Contact[]>(getContacts());
+  
+  // Add to contacts modal state
+  const [showAddContactModal, setShowAddContactModal] = useState(false);
+  const [selectedAddress, setSelectedAddress] = useState('');
+  const [contactName, setContactName] = useState('');
+  const [addedToContacts, setAddedToContacts] = useState<string[]>([]);
 
   const getSignerRole = (address: string): Role => {
     const found = signersWithRoles?.find(s => s.address === address);
-    return found?.role || 'Executor';
+    return found?.role || 'Viewer';
   };
 
   const getRoleBadgeStyle = (role: Role) => {
@@ -57,258 +46,194 @@ export const Members: React.FC<MembersProps> = ({
     }
   };
 
-  const handleAddSigner = async () => {
-    if (!newSignerAddress || !onAddSigner) return;
-    
-    // Validate address
-    if (!newSignerAddress.startsWith('G') || newSignerAddress.length !== 56) {
-      setError('Invalid Stellar address');
-      return;
-    }
-
-    if (signers.includes(newSignerAddress)) {
-      setError('Address is already a signer');
-      return;
-    }
-
-    setLoading(true);
-    setError('');
-    try {
-      await onAddSigner(newSignerAddress, newSignerRole);
-      setShowAddModal(false);
-      setNewSignerAddress('');
-      setNewSignerRole('Executor');
-    } catch (err: any) {
-      setError(err.message || 'Failed to add signer');
-    } finally {
-      setLoading(false);
-    }
+  const isInContacts = (address: string): boolean => {
+    return contacts.some(c => c.address === address) || addedToContacts.includes(address);
   };
 
-  const handleRemoveSigner = async (address: string) => {
-    if (!onRemoveSigner) return;
+  const handleAddToContacts = () => {
+    if (!contactName.trim() || !selectedAddress) return;
 
-    // Check if removing would break threshold
-    if (signers.length <= (vaultConfig?.threshold || 1)) {
-      setError('Cannot remove signer: would break threshold requirement');
-      return;
-    }
+    const newContact: Contact = {
+      id: Date.now().toString(),
+      address: selectedAddress,
+      name: contactName.trim(),
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
 
-    // Check if removing last admin
-    const adminCount = signersWithRoles?.filter(s => s.role === 'Admin').length || 0;
-    const isRemovingAdmin = getSignerRole(address) === 'Admin';
-    if (isRemovingAdmin && adminCount <= 1) {
-      setError('Cannot remove the last admin');
-      return;
-    }
-
-    if (!window.confirm(`Remove ${getContactName(address) || truncateAddress(address)} from vault?`)) {
-      return;
-    }
-
-    setLoading(true);
-    setError('');
-    try {
-      await onRemoveSigner(address);
-    } catch (err: any) {
-      setError(err.message || 'Failed to remove signer');
-    } finally {
-      setLoading(false);
-    }
+    saveContact(newContact);
+    setContacts(getContacts());
+    setAddedToContacts([...addedToContacts, selectedAddress]);
+    setShowAddContactModal(false);
+    setContactName('');
+    setSelectedAddress('');
   };
 
-  const handleRoleChange = async (address: string, role: Role) => {
-    if (!onSetRole) return;
+  const filteredSigners = signers.filter(signer => {
+    if (!searchQuery) return true;
+    const contact = getContactByAddress(signer);
+    const searchLower = searchQuery.toLowerCase();
+    return (
+      signer.toLowerCase().includes(searchLower) ||
+      contact?.name?.toLowerCase().includes(searchLower) ||
+      getSignerRole(signer).toLowerCase().includes(searchLower)
+    );
+  });
 
-    // Check if changing last admin away from admin
-    const adminCount = signersWithRoles?.filter(s => s.role === 'Admin').length || 0;
-    const currentRole = getSignerRole(address);
-    if (currentRole === 'Admin' && role !== 'Admin' && adminCount <= 1) {
-      setError('Cannot change role: vault must have at least one admin');
-      return;
-    }
-
-    setLoading(true);
-    setError('');
-    try {
-      await onSetRole(address, role);
-      setEditingRole(null);
-    } catch (err: any) {
-      setError(err.message || 'Failed to change role');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleThresholdChange = async () => {
-    if (!onSetThreshold) return;
-
-    if (newThreshold < 1) {
-      setError('Threshold must be at least 1');
-      return;
-    }
-
-    if (newThreshold > signers.length) {
-      setError('Threshold cannot exceed number of signers');
-      return;
-    }
-
-    setLoading(true);
-    setError('');
-    try {
-      await onSetThreshold(newThreshold);
-      setShowThresholdModal(false);
-    } catch (err: any) {
-      setError(err.message || 'Failed to change threshold');
-    } finally {
-      setLoading(false);
-    }
-  };
+  const adminCount = signersWithRoles?.filter(s => s.role === 'Admin').length || 0;
+  const executorCount = signersWithRoles?.filter(s => s.role === 'Executor').length || 0;
+  const viewerCount = signersWithRoles?.filter(s => s.role === 'Viewer').length || 0;
 
   return (
     <div className="space-y-6">
-      {/* Error Display */}
-      {error && (
-        <div className="p-4 rounded-xl bg-red-500/10 border border-red-500/20 text-red-400">
-          {error}
-          <button onClick={() => setError('')} className="float-right hover:text-red-300">×</button>
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-bold">Vault Members</h1>
+          <p className="text-gray-400 mt-1">
+            {signers.length} member{signers.length !== 1 ? 's' : ''} • 
+            Threshold: {vaultConfig?.threshold || 1} of {signers.length}
+          </p>
         </div>
-      )}
+      </div>
+
+      {/* Stats Cards */}
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <div className="rounded-xl bg-gradient-to-br from-purple-500/10 to-blue-500/10 border border-purple-500/20 p-4">
+          <p className="text-sm text-gray-400">Total Members</p>
+          <p className="text-2xl font-bold">{signers.length}</p>
+        </div>
+        <div className="rounded-xl bg-gradient-to-br from-purple-500/10 to-pink-500/10 border border-purple-500/20 p-4">
+          <p className="text-sm text-gray-400">Admins</p>
+          <p className="text-2xl font-bold text-purple-400">{adminCount}</p>
+        </div>
+        <div className="rounded-xl bg-gradient-to-br from-blue-500/10 to-cyan-500/10 border border-blue-500/20 p-4">
+          <p className="text-sm text-gray-400">Executors</p>
+          <p className="text-2xl font-bold text-blue-400">{executorCount}</p>
+        </div>
+        <div className="rounded-xl bg-gradient-to-br from-gray-500/10 to-slate-500/10 border border-gray-500/20 p-4">
+          <p className="text-sm text-gray-400">Viewers</p>
+          <p className="text-2xl font-bold text-gray-400">{viewerCount}</p>
+        </div>
+      </div>
+
+      {/* Search */}
+      <div className="relative">
+        <input
+          type="text"
+          placeholder="Search members by address, name, or role..."
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          className="w-full p-4 pl-12 rounded-xl bg-gray-800/50 border border-gray-700 focus:border-purple-500 focus:outline-none"
+        />
+        <svg
+          className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400"
+          fill="none"
+          stroke="currentColor"
+          viewBox="0 0 24 24"
+        >
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+        </svg>
+      </div>
+
+      {/* Info Banner */}
+      <div className="p-4 rounded-xl bg-blue-500/10 border border-blue-500/20 text-blue-400 text-sm">
+        💡 To manage members (add, remove, change roles), go to <strong>Settings → Members & Roles</strong>
+      </div>
 
       {/* Members List */}
-      <div className="rounded-2xl bg-gradient-to-br from-gray-800/50 to-gray-900/50 border border-gray-700/50">
-        <div className="p-6 border-b border-gray-700/50 flex items-center justify-between">
-          <h2 className="text-lg font-semibold">Vault Members</h2>
-          <div className="flex items-center gap-3">
-            <span className="px-3 py-1 rounded-full bg-cyan-500/20 text-cyan-400 text-sm">
-              {signers.length} signers
-            </span>
-            {canManageMembers && (
-              <button
-                onClick={() => setShowAddModal(true)}
-                className="px-4 py-2 rounded-xl bg-gradient-to-r from-purple-500 to-blue-500 hover:from-purple-600 hover:to-blue-600 text-white font-medium transition-all flex items-center gap-2"
-              >
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-                </svg>
-                Add Member
-              </button>
-            )}
-          </div>
-        </div>
-
+      <div className="rounded-2xl bg-gradient-to-br from-gray-800/50 to-gray-900/50 border border-gray-700/50 overflow-hidden">
         <div className="divide-y divide-gray-700/50">
-          {signers.map((signer, i) => {
+          {filteredSigners.map((signer) => {
             const role = getSignerRole(signer);
-            const contactName = getContactName(signer);
-            
+            const contact = getContactByAddress(signer);
+            const isCurrentUser = signer === publicKey;
+
             return (
-              <div key={i} className="p-4 flex items-center justify-between hover:bg-gray-800/30 transition">
-                <div className="flex items-center gap-4">
-                  <div className={`w-12 h-12 rounded-full flex items-center justify-center font-bold ${
-                    signer === publicKey
-                      ? 'bg-gradient-to-br from-cyan-500 to-blue-600'
-                      : 'bg-gray-700'
-                  }`}>
-                    {signer.slice(0, 2)}
-                  </div>
-                  <div>
-                    {contactName && (
-                      <p className="font-semibold text-white">{contactName}</p>
-                    )}
-                    <p className={`font-mono ${contactName ? 'text-sm text-gray-400' : ''}`}>
-                      {truncateAddress(signer)}
-                    </p>
-                    <div className="flex items-center gap-2 mt-1">
-                      {signer === publicKey && (
-                        <span className="text-xs text-cyan-400 bg-cyan-500/10 px-2 py-0.5 rounded">You</span>
-                      )}
-                      
-                      {/* Role Badge / Dropdown */}
-                      {editingRole === signer && canManageMembers ? (
-                        <select
-                          value={role}
-                          onChange={(e) => handleRoleChange(signer, e.target.value as Role)}
-                          onBlur={() => setEditingRole(null)}
-                          className="text-xs px-2 py-1 rounded bg-gray-700 border border-gray-600 focus:outline-none focus:border-purple-500"
-                          autoFocus
-                        >
-                          <option value="Admin">Admin</option>
-                          <option value="Executor">Executor</option>
-                          <option value="Viewer">Viewer</option>
-                        </select>
-                      ) : (
-                        <button
-                          onClick={() => canManageMembers && setEditingRole(signer)}
-                          className={`text-xs px-2 py-0.5 rounded border ${getRoleBadgeStyle(role)} ${
-                            canManageMembers ? 'cursor-pointer hover:opacity-80' : 'cursor-default'
-                          }`}
-                          disabled={!canManageMembers}
-                        >
+              <div
+                key={signer}
+                className={`p-4 hover:bg-gray-800/30 transition ${isCurrentUser ? 'bg-cyan-500/5' : ''}`}
+              >
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-4">
+                    {/* Avatar */}
+                    <div className={`w-12 h-12 rounded-full flex items-center justify-center font-bold text-lg ${
+                      role === 'Admin' 
+                        ? 'bg-gradient-to-br from-purple-500 to-pink-500'
+                        : role === 'Executor'
+                        ? 'bg-gradient-to-br from-blue-500 to-cyan-500'
+                        : 'bg-gray-700'
+                    }`}>
+                      {contact?.name?.charAt(0).toUpperCase() || signer.slice(0, 2)}
+                    </div>
+
+                    {/* Info */}
+                    <div>
+                      <div className="flex items-center gap-2">
+                        {contact ? (
+                          <>
+                            <p className="font-semibold text-white">{contact.name}</p>
+                            <p className="text-sm text-gray-400 font-mono">({truncateAddress(signer)})</p>
+                          </>
+                        ) : (
+                          <p className="font-mono">{truncateAddress(signer)}</p>
+                        )}
+                      </div>
+
+                      <div className="flex items-center gap-2 mt-1">
+                        {isCurrentUser && (
+                          <span className="text-xs bg-cyan-500/20 text-cyan-400 px-2 py-0.5 rounded-full">
+                            You
+                          </span>
+                        )}
+                        <span className={`text-xs px-2 py-0.5 rounded-full border ${getRoleBadgeStyle(role)}`}>
                           {role}
-                        </button>
-                      )}
+                        </span>
+                      </div>
                     </div>
                   </div>
-                </div>
 
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={() => onCopy(signer)}
-                    className="p-2 text-gray-400 hover:text-white hover:bg-gray-700 rounded-lg transition"
-                    title="Copy address"
-                  >
-                    <CopyIcon />
-                  </button>
-                  
-                  {canManageMembers && signer !== publicKey && (
+                  {/* Actions */}
+                  <div className="flex items-center gap-2">
+                    {/* Add to contacts button */}
+                    {!isInContacts(signer) && (
+                      <button
+                        onClick={() => {
+                          setSelectedAddress(signer);
+                          setShowAddContactModal(true);
+                        }}
+                        className="p-2 text-gray-400 hover:text-green-400 hover:bg-green-500/10 rounded-lg transition"
+                        title="Add to contacts"
+                      >
+                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z" />
+                        </svg>
+                      </button>
+                    )}
+
+                    {/* Copy address */}
                     <button
-                      onClick={() => handleRemoveSigner(signer)}
-                      className="p-2 text-gray-400 hover:text-red-400 hover:bg-red-500/10 rounded-lg transition"
-                      title="Remove member"
-                      disabled={loading}
+                      onClick={() => onCopy(signer)}
+                      className="p-2 text-gray-400 hover:text-white hover:bg-gray-700 rounded-lg transition"
+                      title="Copy address"
                     >
-                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                      </svg>
+                      <CopyIcon />
                     </button>
-                  )}
+                  </div>
                 </div>
               </div>
             );
           })}
-        </div>
-      </div>
 
-      {/* Threshold Info */}
-      <div className="rounded-2xl bg-gradient-to-br from-cyan-500/10 to-blue-500/10 border border-cyan-500/20 p-6">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-4">
-            <div className="w-12 h-12 rounded-xl bg-cyan-500/20 flex items-center justify-center text-cyan-400">
-              <ShieldIcon />
+          {filteredSigners.length === 0 && (
+            <div className="p-8 text-center text-gray-400">
+              No members found matching your search.
             </div>
-            <div>
-              <p className="font-semibold">Approval Threshold</p>
-              <p className="text-gray-400">
-                {vaultConfig?.threshold} of {vaultConfig?.signer_count} signatures required to execute transactions
-              </p>
-            </div>
-          </div>
-          {canManageMembers && (
-            <button
-              onClick={() => {
-                setNewThreshold(vaultConfig?.threshold || 1);
-                setShowThresholdModal(true);
-              }}
-              className="px-4 py-2 rounded-xl bg-cyan-500/20 text-cyan-400 hover:bg-cyan-500/30 transition font-medium"
-            >
-              Change
-            </button>
           )}
         </div>
       </div>
 
-      {/* Role Permissions Info */}
+      {/* Role Legend */}
       <div className="rounded-2xl bg-gradient-to-br from-gray-800/50 to-gray-900/50 border border-gray-700/50 p-6">
         <h3 className="text-lg font-semibold mb-4">Role Permissions</h3>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -316,158 +241,71 @@ export const Members: React.FC<MembersProps> = ({
             <div className="flex items-center gap-2 mb-2">
               <span className="px-2 py-0.5 rounded bg-purple-500/20 text-purple-400 text-sm font-medium">Admin</span>
             </div>
-            <ul className="text-sm text-gray-400 space-y-1">
-              <li>• Manage members & roles</li>
-              <li>• Change threshold</li>
-              <li>• Create & approve transactions</li>
-              <li>• Execute transactions</li>
-              <li>• View all activity</li>
-            </ul>
+            <p className="text-sm text-gray-400">Full control over vault settings, members, and transactions</p>
           </div>
           
           <div className="p-4 rounded-xl bg-blue-500/10 border border-blue-500/20">
             <div className="flex items-center gap-2 mb-2">
               <span className="px-2 py-0.5 rounded bg-blue-500/20 text-blue-400 text-sm font-medium">Executor</span>
             </div>
-            <ul className="text-sm text-gray-400 space-y-1">
-              <li>• Create & approve transactions</li>
-              <li>• Execute transactions</li>
-              <li>• View all activity</li>
-              <li className="text-gray-600">• Cannot manage members</li>
-              <li className="text-gray-600">• Cannot change settings</li>
-            </ul>
+            <p className="text-sm text-gray-400">Can create, approve, and execute transactions</p>
           </div>
           
           <div className="p-4 rounded-xl bg-gray-500/10 border border-gray-500/20">
             <div className="flex items-center gap-2 mb-2">
               <span className="px-2 py-0.5 rounded bg-gray-500/20 text-gray-400 text-sm font-medium">Viewer</span>
             </div>
-            <ul className="text-sm text-gray-400 space-y-1">
-              <li>• View all activity</li>
-              <li>• View balances & history</li>
-              <li className="text-gray-600">• Cannot create transactions</li>
-              <li className="text-gray-600">• Cannot approve/execute</li>
-              <li className="text-gray-600">• Cannot manage anything</li>
-            </ul>
+            <p className="text-sm text-gray-400">Read-only access to view balances and activity</p>
           </div>
         </div>
       </div>
 
-      {/* Add Member Modal */}
-      {showAddModal && (
+      {/* Add to Contacts Modal */}
+      {showAddContactModal && (
         <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
           <div className="bg-[#12131a] rounded-2xl border border-gray-700 w-full max-w-md">
             <div className="p-6 border-b border-gray-700">
-              <h3 className="text-xl font-bold">Add New Member</h3>
+              <h3 className="text-xl font-bold">Add to Contacts</h3>
             </div>
             
             <div className="p-6 space-y-4">
               <div>
-                <label className="block text-sm text-gray-400 mb-2">Stellar Address</label>
-                <input
-                  type="text"
-                  value={newSignerAddress}
-                  onChange={(e) => setNewSignerAddress(e.target.value)}
-                  placeholder="G..."
-                  className="w-full p-3 rounded-xl bg-gray-800 border border-gray-700 focus:border-purple-500 focus:outline-none font-mono text-sm"
-                />
+                <label className="block text-sm text-gray-400 mb-2">Address</label>
+                <p className="font-mono text-sm bg-gray-800 p-3 rounded-xl break-all">
+                  {selectedAddress}
+                </p>
               </div>
               
               <div>
-                <label className="block text-sm text-gray-400 mb-2">Role</label>
-                <select
-                  value={newSignerRole}
-                  onChange={(e) => setNewSignerRole(e.target.value as Role)}
-                  className="w-full p-3 rounded-xl bg-gray-800 border border-gray-700 focus:border-purple-500 focus:outline-none"
-                >
-                  <option value="Admin">Admin - Full control</option>
-                  <option value="Executor">Executor - Can transact</option>
-                  <option value="Viewer">Viewer - Read only</option>
-                </select>
-              </div>
-
-              {error && (
-                <p className="text-red-400 text-sm">{error}</p>
-              )}
-            </div>
-            
-            <div className="p-6 border-t border-gray-700 flex gap-3">
-              <button
-                onClick={() => {
-                  setShowAddModal(false);
-                  setError('');
-                  setNewSignerAddress('');
-                }}
-                className="flex-1 px-4 py-3 rounded-xl bg-gray-700 hover:bg-gray-600 transition"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleAddSigner}
-                disabled={loading || !newSignerAddress}
-                className="flex-1 px-4 py-3 rounded-xl bg-gradient-to-r from-purple-500 to-blue-500 hover:from-purple-600 hover:to-blue-600 disabled:opacity-50 transition font-medium"
-              >
-                {loading ? 'Adding...' : 'Add Member'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Change Threshold Modal */}
-      {showThresholdModal && (
-        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
-          <div className="bg-[#12131a] rounded-2xl border border-gray-700 w-full max-w-md">
-            <div className="p-6 border-b border-gray-700">
-              <h3 className="text-xl font-bold">Change Approval Threshold</h3>
-            </div>
-            
-            <div className="p-6 space-y-4">
-              <div>
-                <label className="block text-sm text-gray-400 mb-2">
-                  Required signatures: {newThreshold} of {signers.length}
-                </label>
+                <label className="block text-sm text-gray-400 mb-2">Name</label>
                 <input
-                  type="range"
-                  min="1"
-                  max={signers.length}
-                  value={newThreshold}
-                  onChange={(e) => setNewThreshold(parseInt(e.target.value))}
-                  className="w-full accent-purple-500"
+                  type="text"
+                  value={contactName}
+                  onChange={(e) => setContactName(e.target.value)}
+                  placeholder="Enter a name for this contact"
+                  className="w-full p-3 rounded-xl bg-gray-800 border border-gray-700 focus:border-purple-500 focus:outline-none"
+                  autoFocus
                 />
-                <div className="flex justify-between text-xs text-gray-500 mt-1">
-                  <span>1</span>
-                  <span>{signers.length}</span>
-                </div>
               </div>
-
-              <div className="p-4 rounded-xl bg-yellow-500/10 border border-yellow-500/20">
-                <p className="text-yellow-400 text-sm">
-                  ⚠️ Changing the threshold affects security. A higher threshold requires more signatures but may slow operations.
-                </p>
-              </div>
-
-              {error && (
-                <p className="text-red-400 text-sm">{error}</p>
-              )}
             </div>
             
             <div className="p-6 border-t border-gray-700 flex gap-3">
               <button
                 onClick={() => {
-                  setShowThresholdModal(false);
-                  setError('');
+                  setShowAddContactModal(false);
+                  setContactName('');
+                  setSelectedAddress('');
                 }}
                 className="flex-1 px-4 py-3 rounded-xl bg-gray-700 hover:bg-gray-600 transition"
               >
                 Cancel
               </button>
               <button
-                onClick={handleThresholdChange}
-                disabled={loading || newThreshold === vaultConfig?.threshold}
+                onClick={handleAddToContacts}
+                disabled={!contactName.trim()}
                 className="flex-1 px-4 py-3 rounded-xl bg-gradient-to-r from-purple-500 to-blue-500 hover:from-purple-600 hover:to-blue-600 disabled:opacity-50 transition font-medium"
               >
-                {loading ? 'Updating...' : 'Update Threshold'}
+                Save Contact
               </button>
             </div>
           </div>

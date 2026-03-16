@@ -2,7 +2,6 @@ import React, { useState } from 'react';
 import { useStellarVault } from './hooks/useStellarVault';
 import { ActiveView } from './types';
 import { Admin } from './components/views/Admin';
-import { FACTORY_CONTRACT_ID } from './config';
 import { getFactoryConfig } from './services/factoryService';
 // Components
 import { LandingPage } from './components/landing/LandingPage';
@@ -19,6 +18,7 @@ import { DepositModal } from './components/modals/DepositModal';
 import { CreateVaultModal } from './components/CreateVaultModal';
 import { XIcon } from './components/icons';
 import { getVaultsByOwner, getVaultInfo, VaultInfo } from './services/factoryService';
+import { TrustlineModal } from './components/modals/TrustlineModal';
 
 function App() {
   const vault = useStellarVault();
@@ -35,6 +35,9 @@ function App() {
   // Vault selection state
   const [userVaults, setUserVaults] = useState<VaultInfo[]>([]);
   const [loadingVaults, setLoadingVaults] = useState(false);
+  const [showTrustlineModal, setShowTrustlineModal] = useState(false);
+  const [showNewTransactionModal, setShowNewTransactionModal] = useState(false);
+
 
   const copyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text);
@@ -112,7 +115,6 @@ function App() {
   }
 
   // Get current vault info for display
-  const currentVaultInfo = userVaults.find(v => v.vault_address === vault.vaultAddress);
   const hasVaults = userVaults.length > 0;
   const hasSelectedVault = !!vault.vaultAddress;
 
@@ -227,23 +229,35 @@ function App() {
                 <Assets
                   vaultAddress={vault.vaultAddress}
                   vaultBalance={vault.vaultBalance}
-                  remainingSpend={vault.remainingSpend}
+                  remainingSpend={vault.remainingSpend ?? BigInt(0)}
                   isSigner={vault.isSigner}
                   userRole={vault.userRole || undefined}
                   onDeposit={() => setShowDepositModal(true)}
-                  onRefresh={vault.loadVaultData}
+                  onRefresh={() => vault.loadVaultData()}
+                  onManageTokens={() => setShowTrustlineModal(true)}
                 />
               )}
+              
+              <TrustlineModal
+                isOpen={showTrustlineModal}
+                userAddress={vault.publicKey}
+                onClose={() => setShowTrustlineModal(false)}
+                onSuccess={() => {
+                  setShowTrustlineModal(false);
+                  vault.loadVaultData();
+                }}
+              />
 
               {activeView === 'transactions' && (
                 <Transactions
+                  vaultAddress={vault.vaultAddress}
                   proposals={vault.proposals}
-                  vaultConfig={vault.vaultConfig}
                   publicKey={vault.publicKey}
                   isSigner={vault.isSigner}
-                  loading={vault.loading}
+                  userRole={vault.userRole || undefined}
                   onApprove={vault.approve}
                   onExecute={vault.execute}
+                  onNewTransaction={() => setShowNewTransactionModal(true)}
                 />
               )}
 
@@ -255,10 +269,6 @@ function App() {
                   publicKey={vault.publicKey}
                   userRole={vault.userRole || undefined}
                   onCopy={copyToClipboard}
-                  onAddSigner={vault.addSigner}
-                  onRemoveSigner={vault.removeSigner}
-                  onSetRole={vault.setMemberRole}
-                  onSetThreshold={vault.setThreshold}
                 />
               )}
 
@@ -274,20 +284,22 @@ function App() {
               )}
 
               {activeView === 'settings' && (
-                  <Settings
-                    vaultAddress={vault.vaultAddress}
-                    vaultConfig={vault.vaultConfig}
-                    signers={vault.signers}
-                    signersWithRoles={vault.signersWithRoles}
-                    userRole={vault.userRole || undefined}
-                    publicKey={vault.publicKey}
-                    onCopy={copyToClipboard}
-                    onAddSigner={vault.addSigner}
-                    onRemoveSigner={vault.removeSigner}
-                    onSetRole={vault.setMemberRole}
-                    onSetThreshold={vault.setThreshold}
-                  />
-                )}
+                <Settings
+                  vaultAddress={vault.vaultAddress}
+                  vaultConfig={vault.vaultConfig}
+                  signers={vault.signers}
+                  signersWithRoles={vault.signersWithRoles}
+                  userRole={vault.userRole || undefined}
+                  publicKey={vault.publicKey}
+                  onCopy={copyToClipboard}
+                  onAddSigner={vault.addSigner}
+                  onRemoveSigner={vault.removeSigner}
+                  onSetRole={vault.setMemberRole}
+                  onSetThreshold={vault.setThreshold}
+                  onSetSpendLimit={vault.setSpendLimit}
+                  onLeaveVault={vault.leaveVault}
+                />
+              )}
             </>
           )}
 
@@ -301,17 +313,19 @@ function App() {
       {/* Modals */}
       {showNewTxModal && (
         <NewTransactionModal
-          loading={vault.loading}
-          onClose={() => setShowNewTxModal(false)}
-          onSubmit={(token, to, amount) => {
-            vault.propose(token, to, amount);
-            setShowNewTxModal(false);
+          isOpen={showNewTransactionModal}
+          onClose={() => setShowNewTransactionModal(false)}
+          onSubmit={async (token, recipient, amount) => {
+            await vault.propose(token, recipient, amount.toString());
+            setShowNewTransactionModal(false);
           }}
         />
       )}
 
       {showDepositModal && (
         <DepositModal
+          vaultAddress={vault.vaultAddress}
+          userAddress={vault.publicKey}
           loading={vault.loading}
           onClose={() => setShowDepositModal(false)}
           onSubmit={(token, amount) => {

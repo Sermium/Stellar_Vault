@@ -268,6 +268,13 @@ export const useStellarVault = () => {
   };
 
   const addSigner = async (newSigner: string, role: Role = 'Executor') => {
+    console.log('Adding signer...');
+    console.log('publicKey (caller):', publicKey);
+    console.log('vaultAddress:', vaultAddress);
+    console.log('newSigner:', newSigner);
+    console.log('userRole:', userRole);
+    console.log('isAdmin:', isAdmin);
+
     if (!publicKey || !vaultAddress) return;
     if (!isAdmin) {
       setError('Only admins can add signers');
@@ -284,6 +291,7 @@ export const useStellarVault = () => {
       setSuccess('Signer added successfully!');
       await loadVaultData();
     } catch (err: any) {
+      console.error('Add signer error:', err);
       setError(err.message || 'Failed to add signer');
       throw err;
     } finally {
@@ -359,6 +367,54 @@ export const useStellarVault = () => {
     }
   };
 
+  const leaveVault = async () => {
+    if (!publicKey || !vaultAddress) return;
+
+    try {
+      setLoading(true);
+      setError(null);
+
+      await stellar.leaveVault(publicKey, vaultAddress);
+      
+      // Clear vault state after leaving
+      setVaultAddress(null);
+      setVaultConfig(null);
+      setSigners([]);
+      setSignersWithRoles([]);
+      setProposals([]);
+      setVaultBalance([]);
+      
+      setSuccess('You have left the vault successfully!');
+    } catch (err: any) {
+      setError(err.message || 'Failed to leave vault');
+      throw err;
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const setSpendLimit = async (token: string, limit: bigint, period: number) => {
+    if (!publicKey || !vaultAddress) return;
+    if (!isAdmin) {
+      setError('Only admins can set spend limits');
+      return;
+    }
+
+    try {
+      setLoading(true);
+      setError(null);
+
+      await stellar.setSpendLimit(publicKey, vaultAddress, token, limit);
+      setSuccess('Spend limit updated successfully!');
+      await loadVaultData();
+    } catch (err: any) {
+      setError(err.message || 'Failed to set spend limit');
+      throw err;
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return {
     // State
     connected,
@@ -398,5 +454,7 @@ export const useStellarVault = () => {
     setMemberRole,
     setError,
     setSuccess,
+    setSpendLimit,
+    leaveVault,
   };
 };

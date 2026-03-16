@@ -3,14 +3,14 @@ use soroban_sdk::{
     contract, contractimpl, contracttype, contracterror,
     auth::{Context, CustomAccountInterface},
     crypto::Hash,
-    Address, Env, Vec, Symbol, Map,
+    Address, Env, Vec, Symbol, String,
     token::Client as TokenClient,
 };
 
 // Fixed fee recipient address
 const FEE_RECIPIENT: &str = "GDI33VCZUVNOPLHPBL5AIQXRO34XY2U4OLS3GFBPJRGGSA2UUCWTE37R";
 const NATIVE_TOKEN: &str = "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC";
-const DEFAULT_TX_FEE: i128 = 1_000_000;
+const DEFAULT_TX_FEE: i128 = 1_000_000; // 0.1 XLM
 
 #[contracttype]
 #[derive(Clone, PartialEq, Debug)]
@@ -100,6 +100,7 @@ pub enum VaultError {
     InsufficientPermissions = 14,
     SignerAlreadyExists = 15,
     CannotRemoveLastAdmin = 16,
+    NoSigners = 17,
 }
 
 #[contract]
@@ -134,7 +135,16 @@ impl CustomAccountInterface for StellarVault {
             signer.require_auth();
             let is_valid = stored_signers.iter().any(|s| s == signer);
             if is_valid {
-                valid_count += 1;
+                // Check role - only Admin and Executor can sign
+                let role: Role = env
+                    .storage()
+                    .instance()
+                    .get(&StorageKey::SignerRole(signer.clone()))
+                    .unwrap_or(Role::Viewer);
+                
+                if role != Role::Viewer {
+                    valid_count += 1;
+                }
             }
         }
 
@@ -154,6 +164,8 @@ impl CustomAccountInterface for StellarVault {
 
 #[contractimpl]
 impl StellarVault {
+    // ============ Initialization ============
+
     pub fn initialize(
         env: Env,
         name: Symbol,
@@ -179,23 +191,54 @@ impl StellarVault {
             threshold,
             signer_count: signers.len() as u32,
             tx_fee_amount: DEFAULT_TX_FEE,
-            tx_fee_token: Address::from_string(&String::from_str(&env, NATIVE_TOKEN)),
-            fee_recipient: Address::from_string(&String::from_str(&env, FEE_RECIPIENT)),
         };
         env.storage().instance().set(&StorageKey::Config, &config);
+
+        // Store fee recipient and token
+        let fee_recipient = Address::from_string(&String::from_str(&env, FEE_RECIPIENT));
+        let fee_token = Address::from_string(&String::from_str(&env, NATIVE_TOKEN));
+        env.storage().instance().set(&StorageKey::FeeRecipient, &fee_recipient);
+        env.storage().instance().set(&StorageKey::FeeToken, &fee_token);
 
         // Store signers and assign roles
         // FIRST signer (creator) gets Admin role, others get Executor
         for (i, signer) in signers.iter().enumerate() {
-            env.storage().instance().set(&StorageKey::Signer(signer.clone()), &true);
-            
-            // First signer = Admin, others = Executor
             let role = if i == 0 { Role::Admin } else { Role::Executor };
-            env.storage().instance().set(&StorageKey::Role(signer.clone()), &role);
+            env.storage().instance().set(&StorageKey::SignerRole(signer.clone()), &role);
         }
 
         env.storage().instance().set(&StorageKey::Signers, &signers);
         env.storage().instance().set(&StorageKey::ProposalCount, &0u64);
+        env.storage().instance().set(&StorageKey::Initialized, &true);
+
+        Ok(())
+    }
+
+    // ============ Internal Fee Collection ============
+
+    fn collect_fee(env: &Env, payer: &Address) -> Result<(), VaultError> {
+        let config: VaultConfig = env
+            .storage()
+            .instance()
+            .get(&StorageKey::Config)
+            .ok_or(VaultError::NotInitialized)?;
+
+        if config.tx_fee_amount > 0 {
+            let fee_token: Address = env
+                .storage()
+                .instance()
+                .get(&StorageKey::FeeToken)
+                .ok_or(VaultError::NotInitialized)?;
+
+            let fee_recipient: Address = env
+                .storage()
+                .instance()
+                .get(&StorageKey::FeeRecipient)
+                .ok_or(VaultError::NotInitialized)?;
+
+            let fee_token_client = TokenClient::new(env, &fee_token);
+            fee_token_client.transfer(payer, &fee_recipient, &config.tx_fee_amount);
+        }
 
         Ok(())
     }
@@ -206,14 +249,19 @@ impl StellarVault {
         admin.require_auth();
         Self::require_role(&env, &admin, Role::Admin)?;
 
-        // Ensure at least one admin remains
+        // Ensure member is a signer
+        Self::require_signer(&env, &member)?;
+
+        // Ensure at least one admin remains if demoting an admin
         if role != Role::Admin {
-            let admin_count = Self::count_admins(&env);
             let current_role: Option<Role> = env.storage().instance().get(&StorageKey::SignerRole(member.clone()));
-            if current_role == Some(Role::Admin) && admin_count <= 1 {
+            if current_role == Some(Role::Admin) && Self::count_admins(&env) <= 1 {
                 return Err(VaultError::CannotRemoveLastAdmin);
             }
         }
+
+        // Collect fee
+        Self::collect_fee(&env, &admin)?;
 
         env.storage().instance().set(&StorageKey::SignerRole(member), &role);
         Ok(())
@@ -288,41 +336,6 @@ impl StellarVault {
         Ok(())
     }
 
-    // ============ Fee Management ============
-
-    pub fn set_tx_fee(env: Env, admin: Address, new_fee_amount: i128) -> Result<(), VaultError> {
-        admin.require_auth();
-        Self::require_role(&env, &admin, Role::Admin)?;
-
-        let mut config: VaultConfig = env
-            .storage()
-            .instance()
-            .get(&StorageKey::Config)
-            .ok_or(VaultError::NotInitialized)?;
-
-        config.tx_fee_amount = new_fee_amount;
-        env.storage().instance().set(&StorageKey::Config, &config);
-
-        Ok(())
-    }
-
-    pub fn get_tx_fee(env: Env) -> Result<i128, VaultError> {
-        let config: VaultConfig = env
-            .storage()
-            .instance()
-            .get(&StorageKey::Config)
-            .ok_or(VaultError::NotInitialized)?;
-
-        Ok(config.tx_fee_amount)
-    }
-
-    pub fn get_fee_recipient(env: Env) -> Result<Address, VaultError> {
-        env.storage()
-            .instance()
-            .get(&StorageKey::FeeRecipient)
-            .ok_or(VaultError::NotInitialized)
-    }
-
     // ============ Signer Management ============
 
     pub fn add_signer(env: Env, admin: Address, new_signer: Address, role: Role) -> Result<(), VaultError> {
@@ -342,6 +355,9 @@ impl StellarVault {
             }
         }
 
+        // Collect fee
+        Self::collect_fee(&env, &admin)?;
+
         let mut config: VaultConfig = env
             .storage()
             .instance()
@@ -349,7 +365,7 @@ impl StellarVault {
             .ok_or(VaultError::NotInitialized)?;
 
         signers.push_back(new_signer.clone());
-        config.signer_count = signers.len();
+        config.signer_count = signers.len() as u32;
 
         env.storage().instance().set(&StorageKey::Signers, &signers);
         env.storage().instance().set(&StorageKey::Config, &config);
@@ -381,21 +397,92 @@ impl StellarVault {
         }
 
         let mut new_signers = Vec::new(&env);
+        let mut found = false;
         for s in signers.iter() {
             if s != signer_to_remove {
                 new_signers.push_back(s);
+            } else {
+                found = true;
             }
         }
 
-        if new_signers.len() < config.threshold {
+        if !found {
+            return Err(VaultError::NotASigner);
+        }
+
+        // Check threshold won't be violated
+        if (new_signers.len() as u32) < config.threshold {
             return Err(VaultError::InvalidThreshold);
         }
 
-        config.signer_count = new_signers.len();
+        // Collect fee
+        Self::collect_fee(&env, &admin)?;
+
+        config.signer_count = new_signers.len() as u32;
         env.storage().instance().set(&StorageKey::Signers, &new_signers);
         env.storage().instance().set(&StorageKey::Config, &config);
         env.storage().instance().remove(&StorageKey::SignerRole(signer_to_remove));
 
+        Ok(())
+    }
+
+    /// Allows any signer to voluntarily leave the vault
+    /// - Last signer can leave (abandons vault)
+    /// - Fee is only charged if not the last signer
+    pub fn leave_vault(env: Env, signer: Address) -> Result<(), VaultError> {
+        signer.require_auth();
+        
+        // Check signer exists
+        Self::require_signer(&env, &signer)?;
+        
+        let mut config: VaultConfig = env
+            .storage()
+            .instance()
+            .get(&StorageKey::Config)
+            .ok_or(VaultError::NotInitialized)?;
+
+        let signers: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&StorageKey::Signers)
+            .ok_or(VaultError::NotInitialized)?;
+
+        // If not the last signer, check constraints
+        if config.signer_count > 1 {
+            // Check if this would violate threshold
+            if (config.signer_count - 1) < config.threshold {
+                return Err(VaultError::InvalidThreshold);
+            }
+
+            // Check if removing last admin (only if others remain)
+            let role: Option<Role> = env.storage().instance().get(&StorageKey::SignerRole(signer.clone()));
+            if role == Some(Role::Admin) && Self::count_admins(&env) <= 1 {
+                return Err(VaultError::CannotRemoveLastAdmin);
+            }
+
+            // Collect fee (only if not abandoning)
+            Self::collect_fee(&env, &signer)?;
+        }
+        // If last signer, allow leaving without fee (abandoning vault)
+        
+        // Remove the signer
+        let mut new_signers = Vec::new(&env);
+        for s in signers.iter() {
+            if s != signer {
+                new_signers.push_back(s);
+            }
+        }
+        
+        // Update signer count
+        config.signer_count = new_signers.len() as u32;
+        
+        // Save updated data
+        env.storage().instance().set(&StorageKey::Signers, &new_signers);
+        env.storage().instance().set(&StorageKey::Config, &config);
+        
+        // Remove role
+        env.storage().instance().remove(&StorageKey::SignerRole(signer));
+        
         Ok(())
     }
 
@@ -413,10 +500,51 @@ impl StellarVault {
             return Err(VaultError::InvalidThreshold);
         }
 
+        // Collect fee
+        Self::collect_fee(&env, &admin)?;
+
         config.threshold = new_threshold;
         env.storage().instance().set(&StorageKey::Config, &config);
 
         Ok(())
+    }
+
+    // ============ Fee Management ============
+
+    pub fn set_tx_fee(env: Env, admin: Address, new_fee_amount: i128) -> Result<(), VaultError> {
+        admin.require_auth();
+        Self::require_role(&env, &admin, Role::Admin)?;
+
+        // Collect fee for this admin action
+        Self::collect_fee(&env, &admin)?;
+
+        let mut config: VaultConfig = env
+            .storage()
+            .instance()
+            .get(&StorageKey::Config)
+            .ok_or(VaultError::NotInitialized)?;
+
+        config.tx_fee_amount = new_fee_amount;
+        env.storage().instance().set(&StorageKey::Config, &config);
+
+        Ok(())
+    }
+
+    pub fn get_tx_fee(env: Env) -> Result<i128, VaultError> {
+        let config: VaultConfig = env
+            .storage()
+            .instance()
+            .get(&StorageKey::Config)
+            .ok_or(VaultError::NotInitialized)?;
+
+        Ok(config.tx_fee_amount)
+    }
+
+    pub fn get_fee_recipient(env: Env) -> Result<Address, VaultError> {
+        env.storage()
+            .instance()
+            .get(&StorageKey::FeeRecipient)
+            .ok_or(VaultError::NotInitialized)
     }
 
     // ============ Spending Policies ============
@@ -429,6 +557,9 @@ impl StellarVault {
     ) -> Result<(), VaultError> {
         admin.require_auth();
         Self::require_role(&env, &admin, Role::Admin)?;
+
+        // Collect fee
+        Self::collect_fee(&env, &admin)?;
 
         let spend_limit = SpendLimit {
             token: token.clone(),
@@ -551,37 +682,16 @@ impl StellarVault {
             .get(&StorageKey::Proposal(proposal_id))
             .ok_or(VaultError::ProposalNotFound)?;
 
-        let config: VaultConfig = env
-            .storage()
-            .instance()
-            .get(&StorageKey::Config)
-            .ok_or(VaultError::NotInitialized)?;
-
         if proposal.status != ProposalStatus::Approved {
             return Err(VaultError::ProposalNotApproved);
         }
 
         Self::check_spend_limit(&env, &proposal.token, proposal.amount)?;
 
-        // Collect transaction fee
-        if config.tx_fee_amount > 0 {
-            let fee_token: Address = env
-                .storage()
-                .instance()
-                .get(&StorageKey::FeeToken)
-                .ok_or(VaultError::NotInitialized)?;
+        // Collect transaction fee from executor
+        Self::collect_fee(&env, &executor)?;
 
-            let fee_recipient: Address = env
-                .storage()
-                .instance()
-                .get(&StorageKey::FeeRecipient)
-                .ok_or(VaultError::NotInitialized)?;
-
-            let fee_token_client = TokenClient::new(&env, &fee_token);
-            fee_token_client.transfer(&executor, &fee_recipient, &config.tx_fee_amount);
-        }
-
-        // Execute transfer
+        // Execute transfer from vault
         let token_client = TokenClient::new(&env, &proposal.token);
         token_client.transfer(&env.current_contract_address(), &proposal.to, &proposal.amount);
 

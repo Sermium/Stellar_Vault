@@ -95,7 +95,26 @@ export const CreateVaultModal: React.FC<CreateVaultModalProps> = ({
     setError('');
 
     try {
-      const tx = await buildCreateVaultTx(userAddress, vaultName, signers, threshold);
+      // Sanitize vault name for Symbol type
+      const cleanName = vaultName
+        .toLowerCase()
+        .replace(/[^a-z0-9_]/g, '')
+        .slice(0, 32);
+      
+      console.log('=== Creating vault ===');
+      console.log('Original name:', vaultName);
+      console.log('Clean name:', cleanName);
+      console.log('Signers:', signers);
+      console.log('Threshold:', threshold);
+      console.log('Creator:', userAddress);
+
+      if (!cleanName) {
+        setError('Vault name must contain at least one letter or number');
+        setLoading(false);
+        return;
+      }
+
+      const tx = await buildCreateVaultTx(userAddress, cleanName, signers, threshold);
       
       const signedResult = await signTransaction(tx.toXDR(), {
         networkPassphrase: NETWORK_PASSPHRASE,

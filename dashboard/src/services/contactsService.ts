@@ -1,7 +1,7 @@
 export interface Contact {
   id: string;
-  name: string;
   address: string;
+  name: string;
   notes?: string;
   createdAt: number;
   updatedAt: number;
@@ -11,8 +11,8 @@ const STORAGE_KEY = 'stellar_vault_contacts';
 
 export const getContacts = (): Contact[] => {
   try {
-    const data = localStorage.getItem(STORAGE_KEY);
-    return data ? JSON.parse(data) : [];
+    const stored = localStorage.getItem(STORAGE_KEY);
+    return stored ? JSON.parse(stored) : [];
   } catch {
     return [];
   }
@@ -40,14 +40,8 @@ export const getContactByAddress = (address: string): Contact | undefined => {
   return getContacts().find(c => c.address === address);
 };
 
-export const getContactName = (address: string): string | undefined => {
-  return getContactByAddress(address)?.name;
-};
-
-export const formatAddress = (address: string): string => {
-  const contact = getContactByAddress(address);
-  if (contact) {
-    return contact.name;
-  }
-  return `${address.slice(0, 6)}...${address.slice(-4)}`;
+// Add this function
+export const getContactName = (address: string): string | null => {
+  const contact = getContacts().find(c => c.address === address);
+  return contact?.name || null;
 };

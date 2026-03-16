@@ -128,3 +128,47 @@ export async function getAllVaultBalances(vaultAddress: string): Promise<TokenBa
 
   return balances;
 }
+
+export interface CustomToken {
+  address: string;
+  symbol: string;
+  name: string;
+  decimals: number;
+  icon?: string;
+  isSAC?: boolean;
+  issuer?: string;
+  addedAt: number;
+}
+
+const STORAGE_KEY = 'stellar_vault_custom_tokens';
+
+export const getCustomTokens = (): CustomToken[] => {
+  try {
+    const stored = localStorage.getItem(STORAGE_KEY);
+    return stored ? JSON.parse(stored) : [];
+  } catch {
+    return [];
+  }
+};
+
+export const saveCustomToken = (token: CustomToken): void => {
+  const tokens = getCustomTokens();
+  const existingIndex = tokens.findIndex(t => t.address === token.address);
+  
+  if (existingIndex >= 0) {
+    tokens[existingIndex] = token;
+  } else {
+    tokens.push(token);
+  }
+  
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(tokens));
+};
+
+export const removeCustomToken = (address: string): void => {
+  const tokens = getCustomTokens().filter(t => t.address !== address);
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(tokens));
+};
+
+export const isCustomToken = (address: string): boolean => {
+  return getCustomTokens().some(t => t.address === address);
+};

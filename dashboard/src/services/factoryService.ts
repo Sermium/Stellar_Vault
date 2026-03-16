@@ -121,6 +121,18 @@ export async function buildCreateVaultTx(
   const contract = new StellarSdk.Contract(FACTORY_CONTRACT_ID);
   const account = await server.getAccount(creator);
   
+  // Sanitize vault name for Symbol type (lowercase, alphanumeric + underscore, max 32 chars)
+  const cleanName = vaultName
+    .toLowerCase()
+    .replace(/[^a-z0-9_]/g, '_')
+    .slice(0, 32);
+  
+  console.log('Original name:', vaultName);
+  console.log('Cleaned name:', cleanName);
+  console.log('Creator:', creator);
+  console.log('Signers:', signers);
+  console.log('Threshold:', threshold);
+  
   // Convert signers to ScVal vector of addresses
   const signersScVal = StellarSdk.xdr.ScVal.scvVec(
     signers.map(s => StellarSdk.Address.fromString(s).toScVal())
@@ -133,7 +145,7 @@ export async function buildCreateVaultTx(
     .addOperation(contract.call(
       'create_vault',
       StellarSdk.Address.fromString(creator).toScVal(),
-      StellarSdk.nativeToScVal(vaultName, { type: 'symbol' }),
+      StellarSdk.nativeToScVal(cleanName, { type: 'symbol' }),
       signersScVal,
       StellarSdk.nativeToScVal(threshold, { type: 'u32' })
     ))
@@ -141,7 +153,11 @@ export async function buildCreateVaultTx(
     .build();
 
   const sim = await server.simulateTransaction(tx);
+  
+  console.log('Simulation result:', sim);
+  
   if (rpc.Api.isSimulationError(sim)) {
+    console.error('Simulation error details:', sim);
     throw new Error(`Simulation failed: ${sim.error}`);
   }
   
