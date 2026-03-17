@@ -64,7 +64,7 @@ const safeNumber = (value: any): number => {
 const PublicVaultView: React.FC<PublicVaultViewProps> = ({ vaultAddress, onClose }) => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [config, setConfig] = useState<VaultConfig | null>(null);
+  const [config, setConfig] = useState<any>(null);
   const [signers, setSigners] = useState<string[]>([]);
   const [locks, setLocks] = useState<Lock[]>([]);
   const [balances, setBalances] = useState<TokenBalance[]>([]);
