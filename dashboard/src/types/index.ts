@@ -43,4 +43,5 @@ export interface TokenInfo {
   issuer?: string;
 }
 
-export type ActiveView = 'home' | 'assets' | 'transactions' | 'members' | 'settings' | 'contacts' | 'admin';
+export type ActiveView = 'home' | 'assets' | 'transactions' | 'members' | 'contacts' | 'settings' | 'admin' | 'locks' | 'public';
+

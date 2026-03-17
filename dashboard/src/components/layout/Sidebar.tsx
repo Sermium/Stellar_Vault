@@ -20,6 +20,13 @@ const AdminIcon = () => (
   </svg>
 );
 
+// Share Icon
+const ShareIcon = () => (
+  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z" />
+  </svg>
+);
+
 interface SidebarProps {
   collapsed: boolean;
   activeView: ActiveView;
@@ -28,6 +35,7 @@ interface SidebarProps {
   userVaults: VaultInfo[];
   isInitialized: boolean;
   publicKey: string | null;
+  walletId?: string | null;
   isSigner: boolean;
   userRole?: 'Admin' | 'Executor' | 'Viewer';
   isFactoryAdmin?: boolean;
@@ -48,6 +56,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   userVaults,
   isInitialized,
   publicKey,
+  walletId,
   isSigner,
   userRole,
   isFactoryAdmin,
@@ -60,10 +69,20 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onCreateVault,
 }) => {
   const [vaultDropdownOpen, setVaultDropdownOpen] = useState(false);
+  const [showShareToast, setShowShareToast] = useState(false);
 
   const navItems = [
     { id: 'home' as ActiveView, icon: <HomeIcon />, label: 'Dashboard' },
     { id: 'assets' as ActiveView, icon: <WalletIcon />, label: 'Assets' },
+    {
+      id: 'locks' as ActiveView,
+      label: 'Locks',
+      icon: (
+        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+        </svg>
+      ),
+    },
     { id: 'transactions' as ActiveView, icon: <SendIcon />, label: 'Transactions', badge: pendingCount + approvedCount },
     { id: 'members' as ActiveView, icon: <UsersIcon />, label: 'Members' },
     { id: 'contacts' as ActiveView, icon: <ContactBookIcon />, label: 'Contacts' },
@@ -91,13 +110,32 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   const roleBadge = getRoleBadge();
 
+  // Share public view link
+  const sharePublicView = () => {
+    if (!vaultAddress) return;
+    const url = `${window.location.origin}?vault=${vaultAddress}&view=public`;
+    navigator.clipboard.writeText(url);
+    setShowShareToast(true);
+    setTimeout(() => setShowShareToast(false), 2000);
+  };
+
   return (
-    <aside className={`${collapsed ? 'w-20' : 'w-64'} bg-[#0d0e12] border-r border-gray-800 flex flex-col transition-all duration-300`}>
+    <aside className={`${collapsed ? 'w-20' : 'w-64'} bg-[#0d0e12] border-r border-gray-800 flex flex-col transition-all duration-300 relative`}>
+      {/* Share Toast */}
+      {showShareToast && (
+        <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-green-500/90 text-white px-4 py-2 rounded-lg text-sm z-50 whitespace-nowrap">
+          Public link copied!
+        </div>
+      )}
+
       {/* Logo */}
       <div className="p-4 border-b border-gray-800">
-        <div className="flex items-center gap-3">
-          <StellarLogo className="w-10 h-10 flex-shrink-0" />
-          {!collapsed && <span className="text-lg font-bold">Stellar Vault</span>}
+        <div className="flex items-center justify-center">
+          <img 
+            src="/stellarvault.png" 
+            alt="Stellar Vault" 
+            className={collapsed ? "w-10 h-auto" : "w-48 h-auto max-h-20"}
+          />
         </div>
       </div>
 
@@ -182,15 +220,25 @@ export const Sidebar: React.FC<SidebarProps> = ({
             )}
           </div>
 
-          {/* Copy Address */}
+          {/* Copy Address & Share Buttons */}
           {vaultAddress && (
-            <button
-              onClick={() => onCopy(vaultAddress)}
-              className="w-full mt-2 flex items-center justify-center gap-2 text-xs text-gray-500 hover:text-gray-300 transition-colors"
-            >
-              <CopyIcon />
-              <span>Copy Address</span>
-            </button>
+            <div className="flex items-center gap-2 mt-2">
+              <button
+                onClick={() => onCopy(vaultAddress)}
+                className="flex-1 flex items-center justify-center gap-2 text-xs text-gray-500 hover:text-gray-300 transition-colors py-1.5 rounded-lg hover:bg-gray-800/50"
+              >
+                <CopyIcon />
+                <span>Copy Address</span>
+              </button>
+              <button
+                onClick={sharePublicView}
+                className="flex-1 flex items-center justify-center gap-2 text-xs text-purple-400 hover:text-purple-300 transition-colors py-1.5 rounded-lg hover:bg-purple-500/10"
+                title="Share public view link"
+              >
+                <ShareIcon />
+                <span>Share View</span>
+              </button>
+            </div>
           )}
         </div>
       )}
@@ -204,6 +252,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
             title={currentVault ? String(currentVault.name) : 'Select Vault'}
           >
             {currentVault ? String(currentVault.name).charAt(0).toUpperCase() : '?'}
+          </button>
+          {/* Share button for collapsed mode */}
+          <button
+            onClick={sharePublicView}
+            className="w-full mt-2 aspect-square rounded-xl bg-purple-500/10 border border-purple-500/20 flex items-center justify-center hover:bg-purple-500/20 transition-colors"
+            title="Share public view"
+          >
+            <ShareIcon />
           </button>
         </div>
       )}
@@ -276,6 +332,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
               <span className={`text-xs px-2 py-0.5 rounded-full ${roleBadge.color}`}>
                 {roleBadge.label}
               </span>
+              {walletId && (
+                <p className="text-xs text-gray-500 mt-1">
+                  via {walletId}
+                </p>
+              )}
             </div>
           )}
         </div>

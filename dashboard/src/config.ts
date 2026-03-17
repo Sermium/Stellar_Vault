@@ -1,5 +1,5 @@
-export const FACTORY_CONTRACT_ID = 'CBVA4JMIXKCEBWFN7RHY57BPFH7F5B7OEUSKQICZKIHY4Y5AR5ZHJNTW';
-export const VAULT_WASM_HASH = 'f2063f76138c656e4b0cdfaab2f8fa27fc7528db1c3c7e6e557a0c6726db6fc2';
+export const FACTORY_CONTRACT_ID = 'CAQHT6M547TSIULH4MWQOZMZ6KNRRYLW4HBTKA5PRKZAOX53CTOCIDXD';
+export const VAULT_WASM_HASH = '1ca33ff765b3c75c09165734384d121a5fac77b6562a9078e634533c758e95c9';
 export const STELLAR_RPC_URL = 'https://soroban-testnet.stellar.org';
 export const SOROBAN_RPC_URL = 'https://soroban-testnet.stellar.org';
 export const NETWORK_PASSPHRASE = 'Test SDF Network ; September 2015';

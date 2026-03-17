@@ -1,7 +1,13 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect } from 'react';
 import freighter from '@stellar/freighter-api';
 import { VaultConfig, Proposal, TokenBalance, Role, SignerWithRole } from '../types';
 import * as stellar from '../lib/stellar';
+import { 
+  disconnectWallet as disconnectWalletService, 
+  getStoredConnection, 
+  WalletType,
+  setWalletConnection 
+} from '../services/walletService';
 
 export const useStellarVault = () => {
   const [connected, setConnected] = useState(false);
@@ -20,7 +26,11 @@ export const useStellarVault = () => {
   const [vaultBalance, setVaultBalance] = useState<TokenBalance[]>([]);
   const [remainingSpend, setRemainingSpend] = useState<bigint | null>(null);
   const [userRole, setUserRole] = useState<Role | null>(null);
+  const [walletId, setWalletId] = useState<string | null>(null);
+  const [locks, setLocks] = useState<any[]>([]);
+  const [lockedAmounts, setLockedAmounts] = useState<Record<string, bigint>>({});
 
+  // Computed values
   const isSigner = publicKey ? signers.includes(publicKey) : false;
   const isAdmin = userRole === 'Admin';
   const canExecute = userRole === 'Admin' || userRole === 'Executor';
@@ -51,6 +61,16 @@ export const useStellarVault = () => {
     }
   }, [error]);
 
+  useEffect(() => {
+    const stored = getStoredConnection();
+    if (stored) {
+      setPublicKey(stored.address);
+      setWalletId(stored.walletId);
+      setConnected(true);
+      setWalletConnection(stored.walletId, stored.address);
+    }
+}, []);
+
   const checkFreighterInstalled = async () => {
     try {
       await freighter.isConnected();
@@ -62,6 +82,9 @@ export const useStellarVault = () => {
         if (addressResult.address) {
           setPublicKey(addressResult.address);
           setConnected(true);
+          setWalletId('freighter');
+          // Important: Update the wallet service!
+          setWalletConnection('freighter', addressResult.address);
         }
       }
     } catch {
@@ -69,39 +92,28 @@ export const useStellarVault = () => {
     }
   };
 
-  const connectWallet = async () => {
-    try {
-      setLoading(true);
-      setError(null);
-
-      const accessResult = await freighter.requestAccess();
-      if (accessResult.error) throw new Error(accessResult.error);
-
-      const addressResult = await freighter.getAddress();
-      if (addressResult.error) throw new Error(addressResult.error);
-
-      if (addressResult.address) {
-        setPublicKey(addressResult.address);
-        setConnected(true);
-      }
-    } catch (err: any) {
-      setError(err.message || 'Failed to connect wallet');
-    } finally {
-      setLoading(false);
-    }
+  const connect = (pubKey: string, walletId: string) => {
+    setPublicKey(pubKey);
+    setConnected(true);
+    setWalletId(walletId);
+    // Update the wallet service so signTransaction works
+    setWalletConnection(walletId as WalletType, pubKey);
   };
 
-  const disconnectWallet = () => {
-    setConnected(false);
+  const disconnect = () => {
+    disconnectWalletService();
     setPublicKey(null);
+    setConnected(false);
+    setWalletId(null);
     setVaultAddress(null);
     setVaultConfig(null);
     setSigners([]);
     setSignersWithRoles([]);
     setProposals([]);
-    setIsInitialized(false);
     setVaultBalance([]);
+    setLocks([]);
     setUserRole(null);
+    setIsInitialized(false);
   };
 
   const selectVault = (address: string | null) => {
@@ -115,55 +127,83 @@ export const useStellarVault = () => {
       setVaultBalance([]);
       setRemainingSpend(null);
       setUserRole(null);
+      setLocks([]);
     }
   };
 
-  const loadVaultData = useCallback(async () => {
-    if (!publicKey || !vaultAddress) return;
-
+  const loadVaultData = async () => {
+    if (!vaultAddress) return;
+    
     try {
       setLoading(true);
+      setError(null);
 
+      // Load config
       const config = await stellar.loadVaultConfig(vaultAddress);
-      if (config) {
-        setVaultConfig(config);
-        setIsInitialized(true);
+      setVaultConfig(config);
 
-        const [loadedSigners, loadedProposals, balance, spend, roles] = await Promise.all([
-          stellar.loadSigners(vaultAddress),
-          stellar.loadProposals(vaultAddress),
-          stellar.loadVaultBalance(vaultAddress),
-          stellar.loadRemainingSpend(vaultAddress),
-          stellar.getAllRoles(vaultAddress),
-        ]);
+      // Load signers
+      const signerList = await stellar.loadSigners(vaultAddress);
+      setSigners(signerList);
 
-        setSigners(loadedSigners);
-        setProposals(loadedProposals);
-        setVaultBalance(balance);
-        setRemainingSpend(spend);
+      // Load all roles at once
+      let signersRoles: SignerWithRole[] = [];
+        for (const signer of signerList) {
+          try {
+            const role = await stellar.getRole(vaultAddress, signer);
+            signersRoles.push({ 
+              address: signer, 
+              role: (role || 'Viewer') as Role 
+            });
+          } catch {
+            signersRoles.push({ address: signer, role: 'Viewer' as Role });
+          }
+        }
+      setSignersWithRoles(signersRoles);
 
-        // Set signers with roles
-        const swRoles: SignerWithRole[] = loadedSigners.map(addr => {
-          const roleInfo = roles.find(r => r.address === addr);
-          return {
-            address: addr,
-            role: (roleInfo?.role as Role) || 'Viewer',
-          };
-        });
-        setSignersWithRoles(swRoles);
-
-        // Get current user's role
-        const myRole = roles.find(r => r.address === publicKey);
-        setUserRole((myRole?.role as Role) || null);
+      // Set user role if user is a signer
+      if (publicKey && signerList.includes(publicKey)) {
+        const myRole = signersRoles.find(s => s.address === publicKey);
+        if (myRole) {
+          setUserRole(myRole.role);
+        }
       } else {
-        setIsInitialized(false);
+        setUserRole(null);
       }
+
+      // Load proposals
+      try {
+        const proposalList = await stellar.loadProposals(vaultAddress);
+        setProposals(proposalList);
+      } catch {
+        setProposals([]);
+      }
+
+      // Load balances
+      try {
+        const balances = await stellar.loadVaultBalance(vaultAddress);
+        setVaultBalance(balances);
+      } catch {
+        setVaultBalance([]);
+      }
+
+      // Load locks
+      try {
+        const lockList = await stellar.getLocks(vaultAddress, 0, 100);
+        setLocks(lockList || []);
+      } catch (err) {
+        console.error('Failed to load locks:', err);
+        setLocks([]);
+      }
+
+      setIsInitialized(true);
     } catch (err: any) {
       console.error('Failed to load vault data:', err);
+      setError(err.message || 'Failed to load vault data');
     } finally {
       setLoading(false);
     }
-  }, [publicKey, vaultAddress]);
+  };
 
   const initialize = async (name: string, signersList: string, threshold: number) => {
     if (!publicKey || !vaultAddress) return;
@@ -268,13 +308,6 @@ export const useStellarVault = () => {
   };
 
   const addSigner = async (newSigner: string, role: Role = 'Executor') => {
-    console.log('Adding signer...');
-    console.log('publicKey (caller):', publicKey);
-    console.log('vaultAddress:', vaultAddress);
-    console.log('newSigner:', newSigner);
-    console.log('userRole:', userRole);
-    console.log('isAdmin:', isAdmin);
-
     if (!publicKey || !vaultAddress) return;
     if (!isAdmin) {
       setError('Only admins can add signers');
@@ -376,13 +409,13 @@ export const useStellarVault = () => {
 
       await stellar.leaveVault(publicKey, vaultAddress);
       
-      // Clear vault state after leaving
       setVaultAddress(null);
       setVaultConfig(null);
       setSigners([]);
       setSignersWithRoles([]);
       setProposals([]);
       setVaultBalance([]);
+      setLocks([]);
       
       setSuccess('You have left the vault successfully!');
     } catch (err: any) {
@@ -415,6 +448,117 @@ export const useStellarVault = () => {
     }
   };
 
+  // Lock functions
+  const createTimeLock = async (
+    beneficiary: string,
+    token: string,
+    amount: string,
+    unlockTime: number,
+    revocable: boolean,
+    description: string
+  ) => {
+    if (!publicKey || !vaultAddress) return;
+    try {
+      setLoading(true);
+      setError(null);
+      const amountBigInt = BigInt(Math.floor(parseFloat(amount) * 10_000_000));
+      const lockId = await stellar.createTimeLock(
+        publicKey,
+        vaultAddress,
+        beneficiary,
+        token,
+        amountBigInt,
+        unlockTime,
+        revocable,
+        description
+      );
+      setSuccess(`Time lock #${lockId} created successfully!`);
+      await loadVaultData();
+      return lockId;
+    } catch (err: any) {
+      setError(err.message || 'Failed to create time lock');
+      throw err;
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const createVestingLock = async (
+    beneficiary: string,
+    token: string,
+    amount: string,
+    startTime: number,
+    cliffDuration: number,
+    totalDuration: number,
+    releaseIntervals: number,
+    revocable: boolean,
+    description: string
+  ) => {
+    if (!publicKey || !vaultAddress) return;
+    try {
+      setLoading(true);
+      setError(null);
+      const amountBigInt = BigInt(Math.floor(parseFloat(amount) * 10_000_000));
+      const lockId = await stellar.createVestingLock(
+        publicKey,
+        vaultAddress,
+        beneficiary,
+        token,
+        amountBigInt,
+        startTime,
+        cliffDuration,
+        totalDuration,
+        releaseIntervals,
+        revocable,
+        description
+      );
+      setSuccess(`Vesting lock #${lockId} created successfully!`);
+      await loadVaultData();
+      return lockId;
+    } catch (err: any) {
+      setError(err.message || 'Failed to create vesting lock');
+      throw err;
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const claimLock = async (lockId: number) => {
+    if (!publicKey || !vaultAddress) return;
+    try {
+      setLoading(true);
+      setError(null);
+      const claimed = await stellar.claimLock(publicKey, vaultAddress, lockId);
+      const claimedXLM = Number(claimed) / 10_000_000;
+      setSuccess(`Claimed ${claimedXLM.toFixed(7)} XLM from lock #${lockId}`);
+      await loadVaultData();
+      return claimed;
+    } catch (err: any) {
+      setError(err.message || 'Failed to claim lock');
+      throw err;
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const cancelLock = async (lockId: number) => {
+    if (!publicKey || !vaultAddress) return;
+    try {
+      setLoading(true);
+      setError(null);
+      const reclaimed = await stellar.cancelLock(publicKey, vaultAddress, lockId);
+      const reclaimedXLM = Number(reclaimed) / 10_000_000;
+      setSuccess(`Lock #${lockId} cancelled. ${reclaimedXLM.toFixed(7)} XLM returned to vault.`);
+      await loadVaultData();
+      return reclaimed;
+    } catch (err: any) {
+      setError(err.message || 'Failed to cancel lock');
+      throw err;
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return {
     // State
     connected,
@@ -437,10 +581,12 @@ export const useStellarVault = () => {
     userRole,
     pendingCount,
     approvedCount,
-
+    walletId,
+    locks,
+    lockedAmounts,
     // Actions
-    connectWallet,
-    disconnectWallet,
+    connect,
+    disconnect,
     selectVault,
     loadVaultData,
     initialize,
@@ -456,5 +602,9 @@ export const useStellarVault = () => {
     setSuccess,
     setSpendLimit,
     leaveVault,
+    createTimeLock,
+    createVestingLock,
+    claimLock,
+    cancelLock,
   };
 };

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useStellarVault } from './hooks/useStellarVault';
 import { ActiveView } from './types';
 import { Admin } from './components/views/Admin';
@@ -13,12 +13,15 @@ import { Transactions } from './components/views/Transactions';
 import { Members } from './components/views/Members';
 import { Settings } from './components/views/Settings';
 import { Contacts } from './components/views/Contacts';
+import Locks from './components/views/Locks';
 import { NewTransactionModal } from './components/modals/NewTransactionModal';
 import { DepositModal } from './components/modals/DepositModal';
 import { CreateVaultModal } from './components/CreateVaultModal';
 import { XIcon } from './components/icons';
 import { getVaultsByOwner, getVaultInfo, VaultInfo } from './services/factoryService';
 import { TrustlineModal } from './components/modals/TrustlineModal';
+import ConnectWalletModal from './components/modals/ConnectWalletModal';
+import PublicVaultView from './components/views/PublicVaultView';
 
 function App() {
   const vault = useStellarVault();
@@ -36,8 +39,14 @@ function App() {
   const [userVaults, setUserVaults] = useState<VaultInfo[]>([]);
   const [loadingVaults, setLoadingVaults] = useState(false);
   const [showTrustlineModal, setShowTrustlineModal] = useState(false);
-  const [showNewTransactionModal, setShowNewTransactionModal] = useState(false);
+  const [showConnectWalletModal, setShowConnectWalletModal] = useState(false);
 
+  // Token preselection for modals
+  const [selectedTokenForTx, setSelectedTokenForTx] = useState<string | null>(null);
+  const [selectedTokenForLock, setSelectedTokenForLock] = useState<string | null>(null);
+  
+  // Public view
+  const [publicViewVault, setPublicViewVault] = useState<string | null>(null);
 
   const copyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text);
@@ -45,8 +54,19 @@ function App() {
     setTimeout(() => setCopied(false), 2000);
   };
 
+  // Check for public view URL parameters on mount
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const vaultParam = params.get('vault');
+    const viewParam = params.get('view');
+    
+    if (vaultParam && viewParam === 'public') {
+      setPublicViewVault(vaultParam);
+    }
+  }, []);
+
   // Load user's vaults when connected
-  React.useEffect(() => {
+  useEffect(() => {
     if (vault.connected && vault.publicKey) {
       loadUserVaults();
     }
@@ -80,7 +100,7 @@ function App() {
     }
   };
 
-  React.useEffect(() => {
+  useEffect(() => {
     const checkFactoryAdmin = async () => {
       if (!vault.publicKey) {
         setIsFactoryAdmin(false);
@@ -101,16 +121,40 @@ function App() {
     setShowCreateVaultModal(false);
   };
 
+  const handleWalletConnect = (publicKey: string, walletId: string) => {
+    vault.connect(publicKey, walletId);
+    setShowConnectWalletModal(false);
+  };
+
+  // PUBLIC VIEW - Check this FIRST before wallet connection
+  if (publicViewVault) {
+    return (
+      <PublicVaultView
+        vaultAddress={publicViewVault}
+        onClose={() => {
+          setPublicViewVault(null);
+          window.history.pushState({}, '', window.location.pathname);
+        }}
+      />
+    );
+  }
+
   // Landing page for non-connected users
   if (!vault.connected) {
     return (
-      <LandingPage
-        freighterInstalled={vault.freighterInstalled}
-        loading={vault.loading}
-        error={vault.error}
-        onConnect={vault.connectWallet}
-        onDismissError={() => vault.setError(null)}
-      />
+      <>
+        <LandingPage
+          loading={vault.loading}
+          error={vault.error}
+          onConnect={() => setShowConnectWalletModal(true)}
+          onDismissError={() => vault.setError(null)}
+        />
+        <ConnectWalletModal
+          isOpen={showConnectWalletModal}
+          onClose={() => setShowConnectWalletModal(false)}
+          onConnect={handleWalletConnect}
+        />
+      </>
     );
   }
 
@@ -136,7 +180,8 @@ function App() {
         approvedCount={vault.approvedCount}
         onViewChange={setActiveView}
         onCopy={copyToClipboard}
-        onDisconnect={vault.disconnectWallet}
+        onDisconnect={vault.disconnect}
+        walletId={vault.walletId || null}
         onSelectVault={(address) => vault.selectVault(address)}
         onCreateVault={() => setShowCreateVaultModal(true)}
       />
@@ -235,18 +280,16 @@ function App() {
                   onDeposit={() => setShowDepositModal(true)}
                   onRefresh={() => vault.loadVaultData()}
                   onManageTokens={() => setShowTrustlineModal(true)}
+                  onSend={(tokenAddress) => {
+                    setSelectedTokenForTx(tokenAddress);
+                    setShowNewTxModal(true);
+                  }}
+                  onLock={(tokenAddress) => {
+                    setSelectedTokenForLock(tokenAddress);
+                    setActiveView('locks');
+                  }}
                 />
               )}
-              
-              <TrustlineModal
-                isOpen={showTrustlineModal}
-                userAddress={vault.publicKey}
-                onClose={() => setShowTrustlineModal(false)}
-                onSuccess={() => {
-                  setShowTrustlineModal(false);
-                  vault.loadVaultData();
-                }}
-              />
 
               {activeView === 'transactions' && (
                 <Transactions
@@ -257,7 +300,7 @@ function App() {
                   userRole={vault.userRole || undefined}
                   onApprove={vault.approve}
                   onExecute={vault.execute}
-                  onNewTransaction={() => setShowNewTransactionModal(true)}
+                  onNewTransaction={() => setShowNewTxModal(true)}
                 />
               )}
 
@@ -276,7 +319,7 @@ function App() {
                 <Contacts onCopy={copyToClipboard} />
               )}
 
-              {activeView === 'admin' && isFactoryAdmin &&  (
+              {activeView === 'admin' && isFactoryAdmin && (
                 <Admin
                   publicKey={vault.publicKey}
                   onCopy={copyToClipboard}
@@ -300,6 +343,22 @@ function App() {
                   onLeaveVault={vault.leaveVault}
                 />
               )}
+
+              {activeView === 'locks' && (
+                <Locks
+                  vaultAddress={vault.vaultAddress}
+                  locks={vault.locks}
+                  vaultBalance={vault.vaultBalance}
+                  userRole={vault.userRole || undefined}
+                  publicKey={vault.publicKey}
+                  onCreateTimeLock={vault.createTimeLock}
+                  onCreateVestingLock={vault.createVestingLock}
+                  onClaimLock={vault.claimLock}
+                  onCancelLock={vault.cancelLock}
+                  onRefresh={() => vault.loadVaultData()}
+                  preselectedToken={selectedTokenForLock}
+                />
+              )}
             </>
           )}
 
@@ -313,12 +372,17 @@ function App() {
       {/* Modals */}
       {showNewTxModal && (
         <NewTransactionModal
-          isOpen={showNewTransactionModal}
-          onClose={() => setShowNewTransactionModal(false)}
+          isOpen={showNewTxModal}
+          onClose={() => {
+            setShowNewTxModal(false);
+            setSelectedTokenForTx(null);
+          }}
           onSubmit={async (token, recipient, amount) => {
             await vault.propose(token, recipient, amount.toString());
-            setShowNewTransactionModal(false);
+            setShowNewTxModal(false);
+            setSelectedTokenForTx(null);
           }}
+          preselectedToken={selectedTokenForTx}
         />
       )}
 
@@ -335,12 +399,26 @@ function App() {
         />
       )}
 
-      <CreateVaultModal
-        isOpen={showCreateVaultModal}
-        onClose={() => setShowCreateVaultModal(false)}
-        userAddress={vault.publicKey || ''}
-        onVaultCreated={handleVaultCreated}
-      />
+      {showTrustlineModal && (
+        <TrustlineModal
+          isOpen={showTrustlineModal}
+          userAddress={vault.publicKey}
+          onClose={() => setShowTrustlineModal(false)}
+          onSuccess={() => {
+            setShowTrustlineModal(false);
+            vault.loadVaultData();
+          }}
+        />
+      )}
+
+      {showCreateVaultModal && (
+        <CreateVaultModal
+          isOpen={showCreateVaultModal}
+          onClose={() => setShowCreateVaultModal(false)}
+          userAddress={vault.publicKey || ''}
+          onVaultCreated={handleVaultCreated}
+        />
+      )}
 
       {/* Copy Toast */}
       {copied && (
