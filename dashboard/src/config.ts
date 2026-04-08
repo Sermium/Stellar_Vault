@@ -3,16 +3,16 @@ import { getActiveContracts, getAppConfig } from './lib/supabase';
 // Vite environment
 declare global {
   interface ImportMetaEnv {
-    REACT_APP_NETWORK?: string;
-    REACT_APP_SUPABASE_URL?: string;
-    SUPABASE_ANON_KEY?: string;
+    VITE_NETWORK?: string;
+    VITE_SUPABASE_URL?: string;
+    VITE_SUPABASE_ANON_KEY?: string;
   }
   interface ImportMeta {
     readonly env: ImportMetaEnv;
   }
 }
 
-export const NETWORK = (import.meta.env.REACT_APP_NETWORK as 'testnet' | 'mainnet') || 'testnet';
+export const NETWORK = (import.meta.env.VITE_NETWORK as 'testnet' | 'mainnet') || 'testnet';
 
 // Fallback config
 const FALLBACK = {
