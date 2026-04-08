@@ -1,16 +1,14 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string | undefined;
+const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
 
-if (!supabaseUrl || !supabaseAnonKey) {
-  throw new Error('Missing Supabase env variables');
-}
+export const supabase: SupabaseClient | null =
+  supabaseUrl && supabaseAnonKey
+    ? createClient(supabaseUrl, supabaseAnonKey)
+    : null;
 
-export const supabase: SupabaseClient = createClient(
-  supabaseUrl,
-  supabaseAnonKey
-);
+if (!supabase) {console.warn('Supabase not configured. Check VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY.');}
 
 // Types
 export interface ContractDeployment {
@@ -118,7 +116,7 @@ export async function getActiveContracts(network: 'testnet' | 'mainnet' = 'testn
 // Fetch app config as key-value map
 export async function getAppConfig( network: 'testnet' | 'mainnet' = 'testnet'): Promise<Record<string, string>> {
 
-  if (!supabase) throw new Error('Supabase not initialized');
+  if (!supabase) return {};
 
   const { data, error } = await supabase
     .from('app_config')
