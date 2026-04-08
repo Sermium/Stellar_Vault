@@ -5,7 +5,7 @@ declare global {
   interface ImportMetaEnv {
     REACT_APP_NETWORK?: string;
     REACT_APP_SUPABASE_URL?: string;
-    REACT_APP_SUPABASE_ANON_KEY?: string;
+    SUPABASE_ANON_KEY?: string;
   }
   interface ImportMeta {
     readonly env: ImportMetaEnv;
