@@ -1,17 +1,5 @@
 import { getActiveContracts, getAppConfig } from './lib/supabase';
 
-// Vite environment
-declare global {
-  interface ImportMetaEnv {
-    VITE_NETWORK?: string;
-    VITE_SUPABASE_URL?: string;
-    VITE_SUPABASE_ANON_KEY?: string;
-  }
-  interface ImportMeta {
-    readonly env: ImportMetaEnv;
-  }
-}
-
 export const NETWORK = (import.meta.env.VITE_NETWORK as 'testnet' | 'mainnet') || 'testnet';
 
 // Fallback config
