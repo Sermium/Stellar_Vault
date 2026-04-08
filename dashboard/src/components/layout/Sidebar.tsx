@@ -1,31 +1,6 @@
-import React, { useState } from 'react';
-import { StellarLogo, HomeIcon, WalletIcon, SendIcon, UsersIcon, SettingsIcon, CopyIcon } from '../icons';
-import { VaultConfig, ActiveView } from '../../types';
-import { truncateAddress } from '../../lib/stellar';
+﻿import React, { useState } from 'react';
+import { ActiveView, VaultConfig } from '../../types';
 import { VaultInfo } from '../../services/factoryService';
-
-// Contact Book Icon
-const ContactBookIcon = () => (
-  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
-    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 4v16M4 4v16" />
-  </svg>
-);
-
-// Admin Icon
-const AdminIcon = () => (
-  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-  </svg>
-);
-
-// Share Icon
-const ShareIcon = () => (
-  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z" />
-  </svg>
-);
 
 interface SidebarProps {
   collapsed: boolean;
@@ -35,18 +10,124 @@ interface SidebarProps {
   userVaults: VaultInfo[];
   isInitialized: boolean;
   publicKey: string | null;
-  walletId?: string | null;
   isSigner: boolean;
-  userRole?: 'Admin' | 'Executor' | 'Viewer';
-  isFactoryAdmin?: boolean;
+  userRole?: string;
+  isFactoryAdmin: boolean;
   pendingCount: number;
   approvedCount: number;
   onViewChange: (view: ActiveView) => void;
   onCopy: (text: string) => void;
   onDisconnect: () => void;
+  walletId: string | null;
   onSelectVault: (address: string) => void;
   onCreateVault: () => void;
+  hasBeneficiaryLocks?: boolean;
+  onShowClaimPage?: () => void;
 }
+
+// Icons
+const HomeIcon = () => (
+  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" />
+  </svg>
+);
+
+const AssetsIcon = () => (
+  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+  </svg>
+);
+
+const TransactionsIcon = () => (
+  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
+  </svg>
+);
+
+const MembersIcon = () => (
+  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" />
+  </svg>
+);
+
+const ContactsIcon = () => (
+  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
+  </svg>
+);
+
+const LocksIcon = () => (
+  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+  </svg>
+);
+
+const VestingIcon = () => (
+  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
+  </svg>
+);
+
+const SettingsIcon = () => (
+  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+  </svg>
+);
+
+const AdminIcon = () => (
+  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+  </svg>
+);
+
+const ClaimIcon = () => (
+  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v13m0-13V6a2 2 0 112 2h-2zm0 0V5.5A2.5 2.5 0 109.5 8H12zm-7 4h14M5 12a2 2 0 110-4h14a2 2 0 110 4M5 12v7a2 2 0 002 2h10a2 2 0 002-2v-7" />
+  </svg>
+);
+
+const ShareIcon = () => (
+  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z" />
+  </svg>
+);
+
+const MenuIcon = () => (
+  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+  </svg>
+);
+
+const CloseIcon = () => (
+  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+  </svg>
+);
+
+const CopyIcon = () => (
+  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+  </svg>
+);
+
+const PlusIcon = () => (
+  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+  </svg>
+);
+
+const LogoutIcon = () => (
+  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+  </svg>
+);
+
+const ChevronDownIcon = () => (
+  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+  </svg>
+);
 
 export const Sidebar: React.FC<SidebarProps> = ({
   collapsed,
@@ -56,7 +137,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
   userVaults,
   isInitialized,
   publicKey,
-  walletId,
   isSigner,
   userRole,
   isFactoryAdmin,
@@ -65,52 +145,21 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onViewChange,
   onCopy,
   onDisconnect,
+  walletId,
   onSelectVault,
   onCreateVault,
+  hasBeneficiaryLocks = false,
+  onShowClaimPage,
 }) => {
-  const [vaultDropdownOpen, setVaultDropdownOpen] = useState(false);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [showShareToast, setShowShareToast] = useState(false);
+  const [showVaultDropdown, setShowVaultDropdown] = useState(false);
 
-  const navItems = [
-    { id: 'home' as ActiveView, icon: <HomeIcon />, label: 'Dashboard' },
-    { id: 'assets' as ActiveView, icon: <WalletIcon />, label: 'Assets' },
-    {
-      id: 'locks' as ActiveView,
-      label: 'Locks',
-      icon: (
-        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
-        </svg>
-      ),
-    },
-    { id: 'transactions' as ActiveView, icon: <SendIcon />, label: 'Transactions', badge: pendingCount + approvedCount },
-    { id: 'members' as ActiveView, icon: <UsersIcon />, label: 'Members' },
-    { id: 'contacts' as ActiveView, icon: <ContactBookIcon />, label: 'Contacts' },
-    { id: 'settings' as ActiveView, icon: <SettingsIcon />, label: 'Settings' },
-  ];
-
-  const currentVault = userVaults.find(v => v.vault_address === vaultAddress);
-
-  // Get role badge color
-  const getRoleBadge = () => {
-    if (isFactoryAdmin) {
-      return { color: 'text-yellow-400 bg-yellow-500/20', label: 'Factory Admin' };
-    }
-    switch (userRole) {
-      case 'Admin':
-        return { color: 'text-purple-400 bg-purple-500/20', label: 'Vault Admin' };
-      case 'Executor':
-        return { color: 'text-blue-400 bg-blue-500/20', label: 'Executor' };
-      case 'Viewer':
-        return { color: 'text-gray-400 bg-gray-500/20', label: 'Viewer' };
-      default:
-        return { color: 'text-gray-400 bg-gray-500/20', label: isSigner ? 'Signer' : 'Viewer' };
-    }
+  const truncateAddress = (addr: string) => {
+    if (!addr) return '';
+    return `${addr.slice(0, 6)}...${addr.slice(-6)}`;
   };
 
-  const roleBadge = getRoleBadge();
-
-  // Share public view link
   const sharePublicView = () => {
     if (!vaultAddress) return;
     const url = `${window.location.origin}?vault=${vaultAddress}&view=public`;
@@ -119,124 +168,357 @@ export const Sidebar: React.FC<SidebarProps> = ({
     setTimeout(() => setShowShareToast(false), 2000);
   };
 
-  return (
-    <aside className={`${collapsed ? 'w-20' : 'w-64'} bg-[#0d0e12] border-r border-gray-800 flex flex-col transition-all duration-300 relative`}>
-      {/* Share Toast */}
-      {showShareToast && (
-        <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-green-500/90 text-white px-4 py-2 rounded-lg text-sm z-50 whitespace-nowrap">
-          Public link copied!
-        </div>
-      )}
+  const navItems = [
+    { id: 'dashboard' as ActiveView, label: 'Dashboard', icon: <HomeIcon /> },
+    { id: 'assets' as ActiveView, label: 'Assets', icon: <AssetsIcon /> },
+    { id: 'transactions' as ActiveView, label: 'Transactions', icon: <TransactionsIcon />, badge: pendingCount + approvedCount },
+    { id: 'locks' as ActiveView, label: 'Locks', icon: <LocksIcon /> },
+    { id: 'vesting' as ActiveView, label: 'Vesting', icon: <VestingIcon /> },
+    { id: 'members' as ActiveView, label: 'Members', icon: <MembersIcon /> },
+    { id: 'contacts' as ActiveView, label: 'Contacts', icon: <ContactsIcon /> },
+    { id: 'settings' as ActiveView, label: 'Settings', icon: <SettingsIcon /> },
+  ];
 
-      {/* Logo */}
-      <div className="p-4 border-b border-gray-800">
-        <div className="flex items-center justify-center">
+  const handleNavClick = (view: ActiveView) => {
+    onViewChange(view);
+    setMobileMenuOpen(false);
+  };
+
+  const handleClaimClick = () => {
+    if (onShowClaimPage) {
+      onShowClaimPage();
+      setMobileMenuOpen(false);
+    }
+  };
+
+  // Mobile Header Bar
+  const MobileHeader = () => (
+    <div className="lg:hidden fixed top-0 left-0 right-0 z-50 bg-[#0a0e1a] border-b border-blue-900/30">
+      <div className="flex items-center justify-between px-4 py-3">
+        <div className="flex items-center space-x-3">
           <img 
-            src="/stellarvault.png" 
-            alt="Stellar Vault" 
-            className={collapsed ? "w-10 h-auto" : "w-48 h-auto max-h-20"}
+            src="/logovault.png" 
+            alt="Orion Safe" 
+            className="w-8 h-auto"
           />
+          <div className="flex items-center space-x-1">
+            <span className="text-lg font-bold bg-gradient-to-r from-blue-400 to-cyan-400 bg-clip-text text-transparent">
+              Orion
+            </span>
+            <span className="text-lg font-bold bg-gradient-to-r from-cyan-400 to-teal-400 bg-clip-text text-transparent">
+              Safe
+            </span>
+          </div>
         </div>
+        <button
+          onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+          className="p-2 rounded-lg hover:bg-blue-900/30 transition-colors text-blue-400"
+        >
+          {mobileMenuOpen ? <CloseIcon /> : <MenuIcon />}
+        </button>
       </div>
+    </div>
+  );
 
-      {/* Vault Selector */}
-      {!collapsed && (
-        <div className="p-4 border-b border-gray-800">
-          <div className="relative">
-            <button
-              onClick={() => setVaultDropdownOpen(!vaultDropdownOpen)}
-              className="w-full p-3 rounded-xl bg-gradient-to-br from-purple-500/10 to-blue-500/10 border border-purple-500/20 hover:border-purple-500/40 transition-colors text-left"
-            >
-              <div className="flex items-center justify-between">
-                <div className="flex-1 min-w-0">
-                  <p className="text-xs text-gray-400 mb-1">Active Vault</p>
-                  <p className="font-semibold truncate">
-                    {currentVault ? String(currentVault.name) : vaultConfig?.name || 'Select Vault'}
-                  </p>
-                  {vaultAddress && (
-                    <p className="text-xs text-gray-500 mt-1 font-mono">
-                      {vaultAddress.slice(0, 6)}...{vaultAddress.slice(-4)}
-                    </p>
-                  )}
-                </div>
-                <svg
-                  className={`w-5 h-5 text-gray-400 transition-transform ${vaultDropdownOpen ? 'rotate-180' : ''}`}
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                </svg>
+  // Mobile Menu Overlay
+  const MobileMenu = () => (
+    <>
+      {/* Backdrop */}
+      <div 
+        className={`lg:hidden fixed inset-0 bg-black/70 backdrop-blur-sm z-40 transition-opacity duration-300 ${
+          mobileMenuOpen ? 'opacity-100' : 'opacity-0 pointer-events-none'
+        }`}
+        onClick={() => setMobileMenuOpen(false)}
+      />
+      
+      {/* Slide-in Menu */}
+      <div 
+        className={`lg:hidden fixed top-0 left-0 bottom-0 w-72 bg-[#0a0e1a] z-50 transform transition-transform duration-300 ease-out ${
+          mobileMenuOpen ? 'translate-x-0' : '-translate-x-full'
+        }`}
+      >
+        {/* Menu Header */}
+        <div className="p-4 border-b border-blue-900/30">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center space-x-3">
+              <img 
+                src="/logovault.png" 
+                alt="Orion Safe" 
+                className="w-10 h-auto"
+              />
+              <div className="leading-tight">
+                <p className="text-lg font-bold bg-gradient-to-r from-blue-400 to-cyan-400 bg-clip-text text-transparent">
+                  Orion
+                </p>
+                <p className="text-lg font-bold bg-gradient-to-r from-cyan-400 to-teal-400 bg-clip-text text-transparent">
+                  Safe
+                </p>
               </div>
+            </div>
+            <button
+              onClick={() => setMobileMenuOpen(false)}
+              className="p-2 rounded-lg hover:bg-blue-900/30 transition-colors text-blue-400"
+            >
+              <CloseIcon />
             </button>
+          </div>
+        </div>
 
-            {/* Dropdown */}
-            {vaultDropdownOpen && (
-              <div className="absolute top-full left-0 right-0 mt-2 bg-[#12131a] border border-gray-700 rounded-xl shadow-xl z-50 overflow-hidden">
-                <div className="max-h-64 overflow-y-auto">
-                  {userVaults.map((vault) => (
-                    <button
-                      key={vault.vault_address}
-                      onClick={() => {
-                        onSelectVault(vault.vault_address);
-                        setVaultDropdownOpen(false);
-                      }}
-                      className={`w-full p-3 text-left hover:bg-gray-800/50 transition-colors border-b border-gray-800 last:border-b-0 ${
-                        vault.vault_address === vaultAddress ? 'bg-purple-500/10' : ''
-                      }`}
-                    >
-                      <div className="flex items-center justify-between">
-                        <div className="flex-1 min-w-0">
-                          <p className="font-medium truncate">{String(vault.name)}</p>
-                          <p className="text-xs text-gray-500 font-mono mt-0.5">
-                            {vault.vault_address.slice(0, 8)}...{vault.vault_address.slice(-4)}
-                          </p>
-                        </div>
-                        <div className="text-right ml-2">
-                          <p className="text-xs text-purple-400">{vault.threshold}/{vault.signers?.length || 0}</p>
-                          {vault.vault_address === vaultAddress && (
-                            <span className="text-xs text-green-400">●</span>
-                          )}
-                        </div>
-                      </div>
-                    </button>
-                  ))}
-                </div>
-                
-                {/* Create New Vault */}
+        {/* Vault Selector */}
+        {userVaults.length > 0 && (
+          <div className="p-4 border-b border-blue-900/30">
+            <p className="text-xs text-blue-400/60 mb-2">Current Vault</p>
+            <button
+              onClick={() => setShowVaultDropdown(!showVaultDropdown)}
+              className="w-full flex items-center justify-between p-3 bg-blue-900/20 rounded-lg hover:bg-blue-900/30 transition-colors border border-blue-800/30"
+            >
+              <div className="text-left">
+                <p className="text-sm font-medium text-white">{vaultConfig?.name || 'Select Vault'}</p>
+                {vaultAddress && (
+                  <p className="text-xs text-blue-400/60 font-mono">{truncateAddress(vaultAddress)}</p>
+                )}
+              </div>
+              <ChevronDownIcon />
+            </button>
+            
+            {showVaultDropdown && (
+              <div className="mt-2 bg-blue-900/30 rounded-lg overflow-hidden border border-blue-800/30">
+                {userVaults.map((v) => (
+                  <button
+                    key={v.vault_address}
+                    onClick={() => {
+                      onSelectVault(v.vault_address);
+                      setShowVaultDropdown(false);
+                    }}
+                    className={`w-full p-3 text-left hover:bg-blue-800/30 transition-colors ${
+                      v.vault_address === vaultAddress ? 'bg-blue-600/20 border-l-2 border-cyan-400' : ''
+                    }`}
+                  >
+                    <p className="text-sm font-medium text-white">{v.name}</p>
+                    <p className="text-xs text-blue-400/60 font-mono">{truncateAddress(v.vault_address)}</p>
+                  </button>
+                ))}
                 <button
                   onClick={() => {
                     onCreateVault();
-                    setVaultDropdownOpen(false);
+                    setShowVaultDropdown(false);
+                    setMobileMenuOpen(false);
                   }}
-                  className="w-full p-3 text-left hover:bg-purple-500/10 transition-colors border-t border-gray-700 flex items-center gap-2 text-purple-400"
+                  className="w-full p-3 text-left hover:bg-blue-800/30 transition-colors border-t border-blue-800/30 flex items-center space-x-2 text-cyan-400"
                 >
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-                  </svg>
-                  <span className="font-medium">Create New Vault</span>
+                  <PlusIcon />
+                  <span className="text-sm">Create New Vault</span>
+                </button>
+              </div>
+            )}
+
+            {vaultAddress && (
+              <div className="flex items-center space-x-2 mt-3">
+                <button
+                  onClick={() => onCopy(vaultAddress)}
+                  className="flex-1 flex items-center justify-center space-x-2 p-2 bg-blue-900/20 rounded-lg hover:bg-blue-900/30 transition-colors text-blue-400 text-sm border border-blue-800/30"
+                >
+                  <CopyIcon />
+                  <span>Copy</span>
+                </button>
+                <button
+                  onClick={sharePublicView}
+                  className="flex-1 flex items-center justify-center space-x-2 p-2 bg-blue-900/20 rounded-lg hover:bg-blue-900/30 transition-colors text-blue-400 text-sm border border-blue-800/30"
+                >
+                  <ShareIcon />
+                  <span>Share</span>
                 </button>
               </div>
             )}
           </div>
+        )}
 
-          {/* Copy Address & Share Buttons */}
+        {/* Navigation */}
+        <nav className="p-4 space-y-1 overflow-y-auto max-h-[calc(100vh-350px)]">
+          {navItems.map((item) => (
+            <button
+              key={item.id}
+              onClick={() => handleNavClick(item.id)}
+              className={`w-full flex items-center justify-between px-4 py-3 rounded-xl transition-all ${
+                activeView === item.id
+                  ? 'bg-gradient-to-r from-blue-600/20 to-cyan-600/20 text-cyan-400 border border-cyan-500/30'
+                  : 'text-blue-300/70 hover:bg-blue-900/30 hover:text-white'
+              }`}
+            >
+              <div className="flex items-center space-x-3">
+                {item.icon}
+                <span className="font-medium">{item.label}</span>
+              </div>
+              {item.badge && item.badge > 0 && (
+                <span className="px-2 py-0.5 bg-gradient-to-r from-blue-500 to-cyan-500 rounded-full text-xs text-white">
+                  {item.badge}
+                </span>
+              )}
+            </button>
+          ))}
+
+          {/* Admin Link */}
+          {isFactoryAdmin && (
+            <button
+              onClick={() => handleNavClick('admin')}
+              className={`w-full flex items-center space-x-3 px-4 py-3 rounded-xl transition-all ${
+                activeView === 'admin'
+                  ? 'bg-gradient-to-r from-blue-600/20 to-cyan-600/20 text-cyan-400 border border-cyan-500/30'
+                  : 'text-blue-300/70 hover:bg-blue-900/30 hover:text-white'
+              }`}
+            >
+              <AdminIcon />
+              <span className="font-medium">Admin</span>
+            </button>
+          )}
+
+          {/* Claim Tokens Link */}
+          {hasBeneficiaryLocks && onShowClaimPage && (
+            <button
+              onClick={handleClaimClick}
+              className="w-full flex items-center space-x-3 px-4 py-3 rounded-xl transition-all text-green-400 hover:bg-green-900/30 hover:text-green-300 border border-green-500/30 bg-green-900/20"
+            >
+              <ClaimIcon />
+              <span className="font-medium">Claim Tokens</span>
+            </button>
+          )}
+        </nav>
+
+        {/* User Section */}
+        <div className="absolute bottom-0 left-0 right-0 p-4 border-t border-blue-900/30 bg-[#0a0e1a]">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center space-x-3">
+              <div className="w-10 h-10 rounded-full bg-gradient-to-br from-blue-500 to-cyan-500 flex items-center justify-center text-white font-bold">
+                {publicKey?.slice(0, 2)}
+              </div>
+              <div>
+                <p className="text-sm font-medium text-white">{truncateAddress(publicKey || '')}</p>
+                <p className="text-xs text-blue-400/60">{walletId || 'Connected'}</p>
+              </div>
+            </div>
+            <button
+              onClick={() => {
+                onDisconnect();
+                setMobileMenuOpen(false);
+              }}
+              className="p-2 hover:bg-blue-900/30 rounded-lg transition-colors text-blue-400 hover:text-red-400"
+            >
+              <LogoutIcon />
+            </button>
+          </div>
+        </div>
+      </div>
+    </>
+  );
+
+  // Desktop Sidebar
+  const DesktopSidebar = () => (
+    <aside 
+      className={`hidden lg:flex flex-col h-screen bg-[#0a0e1a] border-r border-blue-900/30 transition-all duration-300 ${
+        collapsed ? 'w-20' : 'w-64'
+      }`}
+    >
+      {/* Logo */}
+      <div className="p-4 border-b border-blue-900/30">
+        <div className="flex items-center justify-center">
+          {collapsed ? (
+            <div className="flex flex-col items-center">
+              <img 
+                src="/logovault.png" 
+                alt="Orion Safe" 
+                className="w-10 h-auto mb-1"
+              />
+              <div className="text-center leading-none">
+                <p className="text-[10px] font-bold bg-gradient-to-r from-blue-400 to-cyan-400 bg-clip-text text-transparent">
+                  Orion
+                </p>
+                <p className="text-[10px] font-bold bg-gradient-to-r from-cyan-400 to-teal-400 bg-clip-text text-transparent">
+                  Safe
+                </p>
+              </div>
+            </div>
+          ) : (
+            <div className="flex items-center space-x-3">
+              <img 
+                src="/logovault.png" 
+                alt="Orion Safe" 
+                className="w-14 h-auto"
+              />
+              <div className="leading-tight">
+                <p className="text-xl font-bold bg-gradient-to-r from-blue-400 to-cyan-400 bg-clip-text text-transparent">
+                  Orion
+                </p>
+                <p className="text-xl font-bold bg-gradient-to-r from-cyan-400 to-teal-400 bg-clip-text text-transparent">
+                  Safe
+                </p>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Vault Selector - Desktop */}
+      {!collapsed && userVaults.length > 0 && (
+        <div className="p-4 border-b border-blue-900/30">
+          <p className="text-xs text-blue-400/60 mb-2">Current Vault</p>
+          <button
+            onClick={() => setShowVaultDropdown(!showVaultDropdown)}
+            className="w-full flex items-center justify-between p-3 bg-blue-900/20 rounded-lg hover:bg-blue-900/30 transition-colors border border-blue-800/30"
+          >
+            <div className="text-left truncate">
+              <p className="text-sm font-medium text-white truncate">{vaultConfig?.name || 'Select Vault'}</p>
+              {vaultAddress && (
+                <p className="text-xs text-blue-400/60 font-mono">{truncateAddress(vaultAddress)}</p>
+              )}
+            </div>
+            <ChevronDownIcon />
+          </button>
+          
+          {showVaultDropdown && (
+            <div className="mt-2 bg-blue-900/30 rounded-lg overflow-hidden max-h-48 overflow-y-auto border border-blue-800/30">
+              {userVaults.map((v) => (
+                <button
+                  key={v.vault_address}
+                  onClick={() => {
+                    onSelectVault(v.vault_address);
+                    setShowVaultDropdown(false);
+                  }}
+                  className={`w-full p-3 text-left hover:bg-blue-800/30 transition-colors ${
+                    v.vault_address === vaultAddress ? 'bg-blue-600/20 border-l-2 border-cyan-400' : ''
+                  }`}
+                >
+                  <p className="text-sm font-medium text-white truncate">{v.name}</p>
+                  <p className="text-xs text-blue-400/60 font-mono">{truncateAddress(v.vault_address)}</p>
+                </button>
+              ))}
+              <button
+                onClick={() => {
+                  onCreateVault();
+                  setShowVaultDropdown(false);
+                }}
+                className="w-full p-3 text-left hover:bg-blue-800/30 transition-colors border-t border-blue-800/30 flex items-center space-x-2 text-cyan-400"
+              >
+                <PlusIcon />
+                <span className="text-sm">Create New Vault</span>
+              </button>
+            </div>
+          )}
+
           {vaultAddress && (
-            <div className="flex items-center gap-2 mt-2">
+            <div className="flex items-center space-x-2 mt-3">
               <button
                 onClick={() => onCopy(vaultAddress)}
-                className="flex-1 flex items-center justify-center gap-2 text-xs text-gray-500 hover:text-gray-300 transition-colors py-1.5 rounded-lg hover:bg-gray-800/50"
+                className="flex-1 flex items-center justify-center space-x-2 p-2 bg-blue-900/20 rounded-lg hover:bg-blue-900/30 transition-colors text-blue-400 text-xs border border-blue-800/30"
               >
                 <CopyIcon />
-                <span>Copy Address</span>
+                <span>Copy</span>
               </button>
               <button
                 onClick={sharePublicView}
-                className="flex-1 flex items-center justify-center gap-2 text-xs text-purple-400 hover:text-purple-300 transition-colors py-1.5 rounded-lg hover:bg-purple-500/10"
-                title="Share public view link"
+                className="flex-1 flex items-center justify-center space-x-2 p-2 bg-blue-900/20 rounded-lg hover:bg-blue-900/30 transition-colors text-blue-400 text-xs border border-blue-800/30"
               >
                 <ShareIcon />
-                <span>Share View</span>
+                <span>Share</span>
               </button>
             </div>
           )}
@@ -245,19 +527,18 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
       {/* Collapsed Vault Indicator */}
       {collapsed && vaultAddress && (
-        <div className="p-4 border-b border-gray-800">
+        <div className="p-2 border-b border-blue-900/30 flex flex-col items-center space-y-2">
           <button
-            onClick={() => setVaultDropdownOpen(!vaultDropdownOpen)}
-            className="w-full aspect-square rounded-xl bg-gradient-to-br from-purple-500/20 to-blue-500/20 border border-purple-500/30 flex items-center justify-center text-lg font-bold"
-            title={currentVault ? String(currentVault.name) : 'Select Vault'}
+            onClick={() => onCopy(vaultAddress)}
+            className="p-2 hover:bg-blue-900/30 rounded-lg transition-colors text-blue-400"
+            title={vaultAddress}
           >
-            {currentVault ? String(currentVault.name).charAt(0).toUpperCase() : '?'}
+            <CopyIcon />
           </button>
-          {/* Share button for collapsed mode */}
           <button
             onClick={sharePublicView}
-            className="w-full mt-2 aspect-square rounded-xl bg-purple-500/10 border border-purple-500/20 flex items-center justify-center hover:bg-purple-500/20 transition-colors"
-            title="Share public view"
+            className="p-2 hover:bg-blue-900/30 rounded-lg transition-colors text-blue-400"
+            title="Share Public View"
           >
             <ShareIcon />
           </button>
@@ -265,90 +546,115 @@ export const Sidebar: React.FC<SidebarProps> = ({
       )}
 
       {/* Navigation */}
-      <nav className="flex-1 p-4 space-y-2">
+      <nav className="flex-1 p-4 space-y-1 overflow-y-auto">
         {navItems.map((item) => (
           <button
             key={item.id}
             onClick={() => onViewChange(item.id)}
-            className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${
+            className={`w-full flex items-center ${collapsed ? 'justify-center' : 'justify-between'} px-4 py-3 rounded-xl transition-all ${
               activeView === item.id
-                ? 'bg-gradient-to-r from-purple-500/20 to-blue-500/20 text-purple-400 border border-purple-500/30'
-                : 'text-gray-400 hover:text-white hover:bg-gray-800/50'
+                ? 'bg-gradient-to-r from-blue-600/20 to-cyan-600/20 text-cyan-400 border border-cyan-500/30'
+                : 'text-blue-300/70 hover:bg-blue-900/30 hover:text-white'
             }`}
+            title={collapsed ? item.label : undefined}
           >
-            {item.icon}
-            {!collapsed && (
-              <>
-                <span className="flex-1 text-left">{item.label}</span>
-                {item.badge && item.badge > 0 && (
-                  <span className="px-2 py-0.5 rounded-full bg-purple-500/20 text-purple-400 text-xs">
-                    {item.badge}
-                  </span>
-                )}
-              </>
+            <div className={`flex items-center ${collapsed ? '' : 'space-x-3'}`}>
+              {item.icon}
+              {!collapsed && <span className="font-medium">{item.label}</span>}
+            </div>
+            {!collapsed && item.badge && item.badge > 0 && (
+              <span className="px-2 py-0.5 bg-gradient-to-r from-blue-500 to-cyan-500 rounded-full text-xs text-white">
+                {item.badge}
+              </span>
             )}
           </button>
         ))}
 
-        {/* Admin Link - Only show for factory admin */}
+        {/* Admin Link */}
         {isFactoryAdmin && (
-          <>
-            <div className="border-t border-gray-700 my-2"></div>
-            <button
-              onClick={() => onViewChange('admin')}
-              className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${
-                activeView === 'admin'
-                  ? 'bg-gradient-to-r from-yellow-500/20 to-orange-500/20 text-yellow-400 border border-yellow-500/30'
-                  : 'text-yellow-400/70 hover:text-yellow-400 hover:bg-yellow-500/10'
-              }`}
-            >
-              <AdminIcon />
-              {!collapsed && (
-                <>
-                  <span className="flex-1 text-left">Factory Admin</span>
-                  <span className="px-2 py-0.5 rounded-full bg-yellow-500/20 text-yellow-400 text-xs">
-                    ⚡
-                  </span>
-                </>
-              )}
-            </button>
-          </>
+          <button
+            onClick={() => onViewChange('admin')}
+            className={`w-full flex items-center ${collapsed ? 'justify-center' : 'space-x-3'} px-4 py-3 rounded-xl transition-all ${
+              activeView === 'admin'
+                ? 'bg-gradient-to-r from-blue-600/20 to-cyan-600/20 text-cyan-400 border border-cyan-500/30'
+                : 'text-blue-300/70 hover:bg-blue-900/30 hover:text-white'
+            }`}
+            title={collapsed ? 'Admin' : undefined}
+          >
+            <AdminIcon />
+            {!collapsed && <span className="font-medium">Admin</span>}
+          </button>
+        )}
+
+        {/* Claim Tokens Link */}
+        {hasBeneficiaryLocks && onShowClaimPage && (
+          <button
+            onClick={handleClaimClick}
+            className={`w-full flex items-center ${collapsed ? 'justify-center' : 'space-x-3'} px-4 py-3 rounded-xl transition-all text-green-400 hover:bg-green-900/30 hover:text-green-300 border border-green-500/30 bg-green-900/20`}
+            title={collapsed ? 'Claim Tokens' : undefined}
+          >
+            <ClaimIcon />
+            {!collapsed && <span className="font-medium">Claim Tokens</span>}
+          </button>
         )}
       </nav>
 
-      {/* User */}
-      <div className="p-4 border-t border-gray-800">
-        <div className={`flex items-center ${collapsed ? 'justify-center' : 'gap-3'}`}>
-          <div className={`w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold flex-shrink-0 ${
-            isFactoryAdmin 
-              ? 'bg-gradient-to-br from-yellow-500 to-orange-600' 
-              : 'bg-gradient-to-br from-purple-500 to-blue-600'
-          }`}>
-            {publicKey?.slice(0, 2)}
-          </div>
-          {!collapsed && (
-            <div className="flex-1 min-w-0">
-              <p className="text-sm font-medium truncate">{truncateAddress(publicKey!)}</p>
-              <span className={`text-xs px-2 py-0.5 rounded-full ${roleBadge.color}`}>
-                {roleBadge.label}
-              </span>
-              {walletId && (
-                <p className="text-xs text-gray-500 mt-1">
-                  via {walletId}
-                </p>
-              )}
+      {/* User Section - Desktop */}
+      <div className="p-4 border-t border-blue-900/30">
+        {collapsed ? (
+          <div className="flex flex-col items-center space-y-2">
+            <div className="w-10 h-10 rounded-full bg-gradient-to-br from-blue-500 to-cyan-500 flex items-center justify-center text-white font-bold text-sm">
+              {publicKey?.slice(0, 2)}
             </div>
-          )}
-        </div>
-        {!collapsed && (
-          <button
-            onClick={onDisconnect}
-            className="w-full mt-3 px-4 py-2 text-sm text-gray-400 hover:text-white hover:bg-gray-800 rounded-lg transition"
-          >
-            Disconnect
-          </button>
+            <button
+              onClick={onDisconnect}
+              className="p-2 hover:bg-blue-900/30 rounded-lg transition-colors text-blue-400 hover:text-red-400"
+              title="Disconnect"
+            >
+              <LogoutIcon />
+            </button>
+          </div>
+        ) : (
+          <div className="flex items-center justify-between">
+            <div className="flex items-center space-x-3">
+              <div className="w-10 h-10 rounded-full bg-gradient-to-br from-blue-500 to-cyan-500 flex items-center justify-center text-white font-bold">
+                {publicKey?.slice(0, 2)}
+              </div>
+              <div>
+                <p className="text-sm font-medium text-white">{truncateAddress(publicKey || '')}</p>
+                <p className="text-xs text-blue-400/60">{walletId || 'Connected'}</p>
+              </div>
+            </div>
+            <button
+              onClick={onDisconnect}
+              className="p-2 hover:bg-blue-900/30 rounded-lg transition-colors text-blue-400 hover:text-red-400"
+              title="Disconnect"
+            >
+              <LogoutIcon />
+            </button>
+          </div>
         )}
       </div>
     </aside>
   );
+
+  return (
+    <>
+      {/* Mobile Components */}
+      <MobileHeader />
+      <MobileMenu />
+
+      {/* Desktop Sidebar */}
+      <DesktopSidebar />
+
+      {/* Share Toast */}
+      {showShareToast && (
+        <div className="fixed bottom-4 right-4 z-50 bg-gradient-to-r from-blue-500 to-cyan-500 text-white px-4 py-2 rounded-lg shadow-lg">
+          Public link copied!
+        </div>
+      )}
+    </>
+  );
 };
+
+export default Sidebar;

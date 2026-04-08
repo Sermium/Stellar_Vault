@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+﻿import React, { useState } from 'react';
 import { CopyIcon } from '../icons';
 import { VaultConfig, Role, SignerWithRole } from '../../types';
 import { truncateAddress } from '../../lib/utils';
@@ -24,7 +24,6 @@ export const Members: React.FC<MembersProps> = ({
   const [searchQuery, setSearchQuery] = useState('');
   const [contacts, setContacts] = useState<Contact[]>(getContacts());
   
-  // Add to contacts modal state
   const [showAddContactModal, setShowAddContactModal] = useState(false);
   const [selectedAddress, setSelectedAddress] = useState('');
   const [contactName, setContactName] = useState('');
@@ -32,16 +31,18 @@ export const Members: React.FC<MembersProps> = ({
 
   const getSignerRole = (address: string): Role => {
     const found = signersWithRoles?.find(s => s.address === address);
-    return found?.role || 'Viewer';
+    return found?.role || 'Executor';
   };
 
   const getRoleBadgeStyle = (role: Role) => {
     switch (role) {
+      case 'SuperAdmin':
+        return 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30';
       case 'Admin':
         return 'bg-purple-500/20 text-purple-400 border-purple-500/30';
       case 'Executor':
         return 'bg-blue-500/20 text-blue-400 border-blue-500/30';
-      case 'Viewer':
+      default:
         return 'bg-gray-500/20 text-gray-400 border-gray-500/30';
     }
   };
@@ -80,28 +81,29 @@ export const Members: React.FC<MembersProps> = ({
     );
   });
 
+  const superAdminCount = signersWithRoles?.filter(s => s.role === 'SuperAdmin').length || 0;
   const adminCount = signersWithRoles?.filter(s => s.role === 'Admin').length || 0;
   const executorCount = signersWithRoles?.filter(s => s.role === 'Executor').length || 0;
-  const viewerCount = signersWithRoles?.filter(s => s.role === 'Viewer').length || 0;
 
   return (
     <div className="space-y-6">
-      {/* Header */}
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold">Vault Members</h1>
           <p className="text-gray-400 mt-1">
-            {signers.length} member{signers.length !== 1 ? 's' : ''} • 
-            Threshold: {vaultConfig?.threshold || 1} of {signers.length}
+            {signers.length} member{signers.length !== 1 ? 's' : ''} • Threshold: {vaultConfig?.threshold || 1} of {signers.length}
           </p>
         </div>
       </div>
 
-      {/* Stats Cards */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
         <div className="rounded-xl bg-gradient-to-br from-purple-500/10 to-blue-500/10 border border-purple-500/20 p-4">
           <p className="text-sm text-gray-400">Total Members</p>
           <p className="text-2xl font-bold">{signers.length}</p>
+        </div>
+        <div className="rounded-xl bg-gradient-to-br from-yellow-500/10 to-orange-500/10 border border-yellow-500/20 p-4">
+          <p className="text-sm text-gray-400">Super Admins</p>
+          <p className="text-2xl font-bold text-yellow-400">{superAdminCount}</p>
         </div>
         <div className="rounded-xl bg-gradient-to-br from-purple-500/10 to-pink-500/10 border border-purple-500/20 p-4">
           <p className="text-sm text-gray-400">Admins</p>
@@ -111,13 +113,8 @@ export const Members: React.FC<MembersProps> = ({
           <p className="text-sm text-gray-400">Executors</p>
           <p className="text-2xl font-bold text-blue-400">{executorCount}</p>
         </div>
-        <div className="rounded-xl bg-gradient-to-br from-gray-500/10 to-slate-500/10 border border-gray-500/20 p-4">
-          <p className="text-sm text-gray-400">Viewers</p>
-          <p className="text-2xl font-bold text-gray-400">{viewerCount}</p>
-        </div>
       </div>
 
-      {/* Search */}
       <div className="relative">
         <input
           type="text"
@@ -136,12 +133,10 @@ export const Members: React.FC<MembersProps> = ({
         </svg>
       </div>
 
-      {/* Info Banner */}
       <div className="p-4 rounded-xl bg-blue-500/10 border border-blue-500/20 text-blue-400 text-sm">
-        💡 To manage members (add, remove, change roles), go to <strong>Settings → Members & Roles</strong>
+        To manage members (add, remove, change roles), go to <strong>Settings → Members & Roles</strong>
       </div>
 
-      {/* Members List */}
       <div className="rounded-2xl bg-gradient-to-br from-gray-800/50 to-gray-900/50 border border-gray-700/50 overflow-hidden">
         <div className="divide-y divide-gray-700/50">
           {filteredSigners.map((signer) => {
@@ -156,18 +151,16 @@ export const Members: React.FC<MembersProps> = ({
               >
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-4">
-                    {/* Avatar */}
                     <div className={`w-12 h-12 rounded-full flex items-center justify-center font-bold text-lg ${
-                      role === 'Admin' 
+                      role === 'SuperAdmin'
+                        ? 'bg-gradient-to-br from-yellow-500 to-orange-500'
+                        : role === 'Admin' 
                         ? 'bg-gradient-to-br from-purple-500 to-pink-500'
-                        : role === 'Executor'
-                        ? 'bg-gradient-to-br from-blue-500 to-cyan-500'
-                        : 'bg-gray-700'
+                        : 'bg-gradient-to-br from-blue-500 to-cyan-500'
                     }`}>
                       {contact?.name?.charAt(0).toUpperCase() || signer.slice(0, 2)}
                     </div>
 
-                    {/* Info */}
                     <div>
                       <div className="flex items-center gap-2">
                         {contact ? (
@@ -193,9 +186,7 @@ export const Members: React.FC<MembersProps> = ({
                     </div>
                   </div>
 
-                  {/* Actions */}
                   <div className="flex items-center gap-2">
-                    {/* Add to contacts button */}
                     {!isInContacts(signer) && (
                       <button
                         onClick={() => {
@@ -211,7 +202,6 @@ export const Members: React.FC<MembersProps> = ({
                       </button>
                     )}
 
-                    {/* Copy address */}
                     <button
                       onClick={() => onCopy(signer)}
                       className="p-2 text-gray-400 hover:text-white hover:bg-gray-700 rounded-lg transition"
@@ -233,15 +223,21 @@ export const Members: React.FC<MembersProps> = ({
         </div>
       </div>
 
-      {/* Role Legend */}
       <div className="rounded-2xl bg-gradient-to-br from-gray-800/50 to-gray-900/50 border border-gray-700/50 p-6">
         <h3 className="text-lg font-semibold mb-4">Role Permissions</h3>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="p-4 rounded-xl bg-yellow-500/10 border border-yellow-500/20">
+            <div className="flex items-center gap-2 mb-2">
+              <span className="px-2 py-0.5 rounded bg-yellow-500/20 text-yellow-400 text-sm font-medium">SuperAdmin</span>
+            </div>
+            <p className="text-sm text-gray-400">Full control including managing other admins and critical settings</p>
+          </div>
+          
           <div className="p-4 rounded-xl bg-purple-500/10 border border-purple-500/20">
             <div className="flex items-center gap-2 mb-2">
               <span className="px-2 py-0.5 rounded bg-purple-500/20 text-purple-400 text-sm font-medium">Admin</span>
             </div>
-            <p className="text-sm text-gray-400">Full control over vault settings, members, and transactions</p>
+            <p className="text-sm text-gray-400">Can manage vault settings, members, and approve transactions</p>
           </div>
           
           <div className="p-4 rounded-xl bg-blue-500/10 border border-blue-500/20">
@@ -250,17 +246,9 @@ export const Members: React.FC<MembersProps> = ({
             </div>
             <p className="text-sm text-gray-400">Can create, approve, and execute transactions</p>
           </div>
-          
-          <div className="p-4 rounded-xl bg-gray-500/10 border border-gray-500/20">
-            <div className="flex items-center gap-2 mb-2">
-              <span className="px-2 py-0.5 rounded bg-gray-500/20 text-gray-400 text-sm font-medium">Viewer</span>
-            </div>
-            <p className="text-sm text-gray-400">Read-only access to view balances and activity</p>
-          </div>
         </div>
       </div>
 
-      {/* Add to Contacts Modal */}
       {showAddContactModal && (
         <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
           <div className="bg-[#12131a] rounded-2xl border border-gray-700 w-full max-w-md">

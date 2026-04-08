@@ -1,4 +1,4 @@
-export interface VaultConfig {
+﻿export interface VaultConfig {
   name: string;
   threshold: number;
   signer_count: number;
@@ -7,22 +7,33 @@ export interface VaultConfig {
   fee_recipient?: string;
 }
 
-export type Role = 'Admin' | 'Executor' | 'Viewer';
+export type Role = 'SuperAdmin' | 'Admin' | 'Executor';
 
 export interface SignerWithRole {
   address: string;
   role: Role;
 }
 
+export type ProposalType = 0 | 1 | 2; // 0=Transfer, 1=TimeLock, 2=VestingLock
+
 export interface Proposal {
   id: number;
+  proposal_type: ProposalType;
   proposer: string;
   token: string;
-  to: string;
+  recipient: string;
   amount: bigint;
   approvals: string[];
-  status: string;
+  cancel_approvals: string[];
+  status: number;
   created_at: number;
+  // Lock-specific fields
+  lock_start_time: number;
+  lock_end_time: number;
+  lock_cliff_time: number;
+  lock_release_intervals: number;
+  lock_revocable: boolean;
+  lock_description: string;
 }
 
 export interface TokenBalance {
@@ -43,5 +54,4 @@ export interface TokenInfo {
   issuer?: string;
 }
 
-export type ActiveView = 'home' | 'assets' | 'transactions' | 'members' | 'contacts' | 'settings' | 'admin' | 'locks' | 'public';
-
+export type ActiveView = 'dashboard' | 'assets' | 'transactions' | 'members' | 'contacts' | 'admin' | 'settings' | 'locks' | 'vesting' | 'claim';

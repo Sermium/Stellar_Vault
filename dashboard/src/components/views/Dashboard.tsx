@@ -1,5 +1,5 @@
-import React from 'react';
-import { SendIcon, CheckIcon, ZapIcon, ClockIcon, ChevronRightIcon } from '../icons';
+﻿import React from 'react';
+import { SendIcon, CheckIcon, ZapIcon, ClockIcon, ChevronRightIcon, ShieldIcon } from '../icons';
 import { VaultConfig, Proposal, TokenBalance } from '../../types';
 import { formatAmount, formatUSD, truncateAddress } from '../../lib/stellar';
 
@@ -12,7 +12,35 @@ interface DashboardProps {
   isSigner: boolean;
   onViewTransactions: () => void;
   onNewTransaction: () => void;
+  onSelectProposal?: (proposalId: number) => void;
 }
+
+const getStatusLabel = (status: number): string => {
+  switch (status) {
+    case 0: return 'Pending';
+    case 1: return 'Approved';
+    case 2: return 'Executed';
+    case 3: return 'Rejected';
+    default: return 'Unknown';
+  }
+};
+
+const getProposalTypeLabel = (type: number): string => {
+  switch (type) {
+    case 0: return 'Transfer';
+    case 1: return 'Time Lock';
+    case 2: return 'Vesting';
+    default: return 'Unknown';
+  }
+};
+
+const getProposalIcon = (type: number, status: number) => {
+  if (status === 2) return <CheckIcon />;
+  if (status === 1) return <ZapIcon />;
+  if (type === 1) return <ShieldIcon />; // Time Lock
+  if (type === 2) return <ClockIcon />;  // Vesting
+  return <ClockIcon />;
+};
 
 export const Dashboard: React.FC<DashboardProps> = ({
   vaultConfig,
@@ -23,6 +51,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
   isSigner,
   onViewTransactions,
   onNewTransaction,
+  onSelectProposal,
 }) => {
   return (
     <div className="space-y-6">
@@ -61,10 +90,10 @@ export const Dashboard: React.FC<DashboardProps> = ({
         </div>
       </div>
 
-      {/* Recent Transactions */}
+      {/* Active Proposals */}
       <div className="rounded-2xl bg-gradient-to-br from-gray-800/50 to-gray-900/50 border border-gray-700/50">
         <div className="p-6 border-b border-gray-700/50 flex items-center justify-between">
-          <h2 className="text-lg font-semibold">Recent Transactions</h2>
+          <h2 className="text-lg font-semibold">Active Proposals</h2>
           <button
             onClick={onViewTransactions}
             className="text-cyan-400 hover:text-cyan-300 text-sm flex items-center gap-1"
@@ -78,7 +107,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
             <div className="w-16 h-16 rounded-full bg-gray-800 flex items-center justify-center mx-auto mb-4">
               <SendIcon />
             </div>
-            <p className="text-gray-400 mb-4">No transactions yet</p>
+            <p className="text-gray-400 mb-4">No proposals yet</p>
             {isSigner && (
               <button
                 onClick={onNewTransaction}
@@ -90,40 +119,54 @@ export const Dashboard: React.FC<DashboardProps> = ({
           </div>
         ) : (
           <div className="divide-y divide-gray-700/50">
-            {proposals.slice(0, 5).map((proposal) => (
-              <div key={proposal.id} className="p-4 hover:bg-gray-800/30 transition">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-4">
-                    <div className={`w-10 h-10 rounded-full flex items-center justify-center ${
-                      proposal.status === 'Executed' ? 'bg-green-500/20 text-green-400' :
-                      proposal.status === 'Approved' ? 'bg-cyan-500/20 text-cyan-400' :
-                      'bg-yellow-500/20 text-yellow-400'
-                    }`}>
-                      {proposal.status === 'Executed' ? <CheckIcon /> :
-                       proposal.status === 'Approved' ? <ZapIcon /> :
-                       <ClockIcon />}
+            {proposals.filter(p => Number(p.status) === 0 || Number(p.status) === 1).slice(0, 5).map((proposal) => {
+              const status = Number(proposal.status);
+              const proposalType = Number(proposal.proposal_type || 0);
+              const statusLabel = getStatusLabel(status);
+              const typeLabel = getProposalTypeLabel(proposalType);
+              
+              return (
+                <div 
+                  key={proposal.id} 
+                  className="p-4 hover:bg-gray-800/30 transition cursor-pointer"
+                  onClick={() => onSelectProposal?.(proposal.id)}
+                >
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-4">
+                      <div className={`w-10 h-10 rounded-full flex items-center justify-center ${
+                        status === 2 ? 'bg-green-500/20 text-green-400' :
+                        status === 3 ? 'bg-red-500/20 text-red-400' :
+                        status === 1 ? 'bg-cyan-500/20 text-cyan-400' :
+                        'bg-yellow-500/20 text-yellow-400'
+                      }`}>
+                        {getProposalIcon(proposalType, status)}
+                      </div>
+                      <div>
+                        <p className="font-medium">
+                          {typeLabel}: {formatAmount(BigInt(proposal.amount.toString()))} XLM
+                        </p>
+                        <p className="text-sm text-gray-400">
+                          To {truncateAddress(proposal.recipient)}
+                        </p>
+                      </div>
                     </div>
-                    <div>
-                      <p className="font-medium">
-                        Send {formatAmount(proposal.amount)} XLM
+                    <div className="text-right">
+                      <p className={`text-sm font-medium ${
+                        status === 2 ? 'text-green-400' :
+                        status === 3 ? 'text-red-400' :
+                        status === 1 ? 'text-cyan-400' :
+                        'text-yellow-400'
+                      }`}>
+                        {statusLabel}
                       </p>
-                      <p className="text-sm text-gray-400">
-                        To {truncateAddress(proposal.to)}
+                      <p className="text-xs text-gray-500">
+                        {proposal.approvals?.length || 0}/{vaultConfig?.threshold || 1} approvals
                       </p>
                     </div>
-                  </div>
-                  <div className="text-right">
-                    <p className={`text-sm font-medium ${
-                      proposal.status === 'Executed' ? 'text-green-400' :
-                      proposal.status === 'Approved' ? 'text-cyan-400' :
-                      'text-yellow-400'
-                    }`}>
-                      {proposal.status}
-                    </p>
                   </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>

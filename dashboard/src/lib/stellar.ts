@@ -1,4 +1,4 @@
-import {
+﻿import {
   Contract,
   TransactionBuilder,
   BASE_FEE,
@@ -12,103 +12,84 @@ import {
   Asset,
 } from '@stellar/stellar-sdk';
 import { signTransaction } from '../services/walletService';
-
-import { STELLAR_RPC_URL, NATIVE_TOKEN, SUPPORTED_TOKENS, NETWORK_PASSPHRASE } from '../config';
+import { getRpcUrl, getNativeToken, NETWORK_PASSPHRASE, SUPPORTED_TOKENS } from '../config';
 import { VaultConfig, Proposal, TokenBalance } from '../types';
 import { getCustomTokens } from '../services/tokensService';
-
-export const getServer = () => new rpc.Server(STELLAR_RPC_URL);
+import { getProposals as dbGetProposals, getLocks as dbGetLocks, getVaultSigners } from '../lib/supabase';
+ 
+// Helper to sanitize strings for Soroban Symbol type
+const sanitizeSymbol = (input: string): string => {
+  return input.toLowerCase().replace(/[^a-z0-9_]/g, '_').slice(0, 32) || 'lock';
+};
+ 
+export const getServer = () => new rpc.Server(getRpcUrl());
 export const getContract = (vaultAddress: string) => new Contract(vaultAddress);
 export { truncateAddress, formatAmount, formatUSD } from './utils';
-
-// Helper to create a temp account for read-only simulations
-const getTempAccount = () => {
-  const tempKeypair = Keypair.random();
-  return new Account(tempKeypair.publicKey(), '0');
-};
-
+ 
+const getTempAccount = () => new Account(Keypair.random().publicKey(), '0');
+ 
+// ============================================================================
+// SIGN AND SUBMIT
+// ============================================================================
+ 
 export async function signAndSubmit(
   tx: Transaction,
   server: rpc.Server
 ): Promise<rpc.Api.GetTransactionResponse> {
   console.log('=== signAndSubmit ===');
-  
-  // Simulate the transaction first
-  console.log('Simulating transaction...');
+ 
   const simResult = await server.simulateTransaction(tx);
-  console.log('Simulation result:', simResult);
-
   if (rpc.Api.isSimulationError(simResult)) {
     console.error('Simulation failed:', simResult);
-    const errorMessage = simResult.error || 'Transaction simulation failed';
-    throw new Error(errorMessage);
+    throw new Error(simResult.error || 'Transaction simulation failed');
   }
-
-  // Assemble the transaction with the simulation results
+ 
   const preparedTx = rpc.assembleTransaction(tx, simResult).build();
-
-  // Sign with wallet (supports all wallets via Stellar Wallets Kit)
-  console.log('Signing with wallet...');
   const signedXdr = await signTransaction(preparedTx.toXDR());
-
-  const signedTx = TransactionBuilder.fromXDR(
-    signedXdr,
-    NETWORK_PASSPHRASE
-  ) as Transaction;
-
-  // Submit the signed transaction
-  console.log('Submitting transaction...');
+  const signedTx = TransactionBuilder.fromXDR(signedXdr, NETWORK_PASSPHRASE) as Transaction;
+ 
   const sendResult = await server.sendTransaction(signedTx);
-  console.log('Send result:', sendResult);
-
   if (sendResult.status === 'ERROR') {
-    console.error('Send error:', sendResult);
     throw new Error(`Transaction send failed: ${sendResult.errorResult?.toString() || 'Unknown error'}`);
   }
-
-  // Poll for result
-  console.log('Polling for result...');
+ 
   let getResult = await server.getTransaction(sendResult.hash);
   while (getResult.status === 'NOT_FOUND') {
     await new Promise((resolve) => setTimeout(resolve, 1000));
     getResult = await server.getTransaction(sendResult.hash);
   }
-
-  console.log('Final result:', getResult);
-
+ 
   if (getResult.status === 'FAILED') {
-    console.error('Transaction failed:', getResult);
     throw new Error('Transaction failed on-chain');
   }
-
+ 
   console.log('=== signAndSubmit SUCCESS ===');
   return getResult;
 }
-
+ 
+// ============================================================================
+// READ-ONLY: VAULT CONFIG & SIGNERS (from contract)
+// ============================================================================
+ 
 export const loadVaultConfig = async (vaultAddress: string): Promise<VaultConfig | null> => {
   try {
     const contract = getContract(vaultAddress);
     const server = getServer();
-    const account = getTempAccount();
-    
-    const tx = new TransactionBuilder(account, {
+    const tx = new TransactionBuilder(getTempAccount(), {
       fee: BASE_FEE,
       networkPassphrase: NETWORK_PASSPHRASE,
     })
       .addOperation(contract.call('get_config'))
       .setTimeout(30)
       .build();
-
+ 
     const sim = await server.simulateTransaction(tx);
-
     if (rpc.Api.isSimulationSuccess(sim) && sim.result?.retval) {
       const config = scValToNative(sim.result.retval);
       return {
         name: config.name?.toString() || config.name,
         threshold: Number(config.threshold),
         signer_count: Number(config.signer_count),
-        tx_fee_amount: config.tx_fee_amount ? BigInt(config.tx_fee_amount) : BigInt(0),
-        fee_recipient: config.fee_recipient?.toString() || '',
       };
     }
     return null;
@@ -117,26 +98,22 @@ export const loadVaultConfig = async (vaultAddress: string): Promise<VaultConfig
     return null;
   }
 };
-
+ 
 export const loadSigners = async (vaultAddress: string): Promise<string[]> => {
   try {
     const contract = getContract(vaultAddress);
     const server = getServer();
-    const account = getTempAccount();
-    
-    const tx = new TransactionBuilder(account, {
+    const tx = new TransactionBuilder(getTempAccount(), {
       fee: BASE_FEE,
       networkPassphrase: NETWORK_PASSPHRASE,
     })
       .addOperation(contract.call('get_signers'))
       .setTimeout(30)
       .build();
-
+ 
     const sim = await server.simulateTransaction(tx);
-
     if (rpc.Api.isSimulationSuccess(sim) && sim.result?.retval) {
-      const signersData = scValToNative(sim.result.retval);
-      return signersData.map((s: any) => s.toString());
+      return scValToNative(sim.result.retval).map((s: any) => s.toString());
     }
     return [];
   } catch (err) {
@@ -144,53 +121,115 @@ export const loadSigners = async (vaultAddress: string): Promise<string[]> => {
     return [];
   }
 };
-
-export const loadProposals = async (vaultAddress: string): Promise<Proposal[]> => {
-  const contract = getContract(vaultAddress);
-  const server = getServer();
-  const loadedProposals: Proposal[] = [];
-  const account = getTempAccount();
-
-  for (let i = 0; i < 20; i++) {
-    try {
-      const tx = new TransactionBuilder(account, {
-        fee: BASE_FEE,
-        networkPassphrase: NETWORK_PASSPHRASE,
-      })
-        .addOperation(contract.call('get_proposal', nativeToScVal(i, { type: 'u64' })))
-        .setTimeout(30)
-        .build();
-
-      const sim = await server.simulateTransaction(tx);
-
-      if (rpc.Api.isSimulationSuccess(sim) && sim.result?.retval) {
-        const proposal = scValToNative(sim.result.retval);
-        loadedProposals.push({
-          id: Number(proposal.id),
-          proposer: proposal.proposer.toString(),
-          token: proposal.token.toString(),
-          to: proposal.to.toString(),
-          amount: BigInt(proposal.amount),
-          approvals: proposal.approvals.map((a: any) => a.toString()),
-          status: Object.keys(proposal.status)[0],
-          created_at: Number(proposal.created_at),
-        });
-      } else {
-        break;
-      }
-    } catch {
-      break;
+ 
+export const getRole = async (vaultAddress: string, member: string): Promise<string | null> => {
+  try {
+    const contract = getContract(vaultAddress);
+    const server = getServer();
+    const tx = new TransactionBuilder(getTempAccount(), {
+      fee: BASE_FEE,
+      networkPassphrase: NETWORK_PASSPHRASE,
+    })
+      .addOperation(contract.call('get_role', new Address(member).toScVal()))
+      .setTimeout(30)
+      .build();
+ 
+    const sim = await server.simulateTransaction(tx);
+    if (rpc.Api.isSimulationSuccess(sim) && sim.result?.retval) {
+      const roleData = scValToNative(sim.result.retval);
+      if (roleData === 0 || roleData?.SuperAdmin !== undefined) return 'SuperAdmin';
+      if (roleData === 1 || roleData?.Admin !== undefined) return 'Admin';
+      if (roleData === 2 || roleData?.Executor !== undefined) return 'Executor';
+      return 'Executor';
     }
+    return null;
+  } catch {
+    return null;
   }
-
-  return loadedProposals.reverse();
 };
-
+ 
+// ============================================================================
+// READ-ONLY: PROPOSALS (from Supabase)
+// ============================================================================
+ 
+export const loadProposals = async (vaultAddress: string): Promise<Proposal[]> => {
+  try {
+    const rows = await dbGetProposals(vaultAddress);
+    return rows.map((row: any) => {
+      let statusValue = 0;
+      if (row.status === 'Pending') statusValue = 0;
+      else if (row.status === 'Approved') statusValue = 1;
+      else if (row.status === 'Executed') statusValue = 2;
+      else if (row.status === 'Rejected') statusValue = 3;
+ 
+      return {
+        id: Number(row.proposal_id),
+        proposal_type: (Number(row.proposal_type || 0) as 0 | 1 | 2),
+        proposer: row.proposer_address || '',
+        token: row.token_address || '',
+        recipient: row.recipient_address || '',
+        amount: BigInt(row.amount || '0'),
+        approvals: row.approvals || [],
+        cancel_approvals: row.cancel_approvals || [],
+        status: statusValue,
+        created_at: row.created_at ? Math.floor(new Date(row.created_at).getTime() / 1000) : 0,
+        lock_start_time: row.start_time ? Math.floor(new Date(row.start_time).getTime() / 1000) : 0,
+        lock_end_time: row.end_time ? Math.floor(new Date(row.end_time).getTime() / 1000) : 0,
+        lock_cliff_time: row.cliff_time ? Math.floor(new Date(row.cliff_time).getTime() / 1000) : 0,
+        lock_release_intervals: Number(row.release_intervals || 0),
+        lock_revocable: Boolean(row.revocable),
+        lock_description: row.description || '',
+      };
+    });
+  } catch (err) {
+    console.error('loadProposals error:', err);
+    return [];
+  }
+};
+ 
+// ============================================================================
+// READ-ONLY: LOCKS (from Supabase)
+// ============================================================================
+ 
+export const loadLocks = async (vaultAddress: string): Promise<any[]> => {
+  try {
+    const rows = await dbGetLocks(vaultAddress);
+    return rows.map((row: any) => ({
+      id: Number(row.lock_id),
+      lock_id: Number(row.lock_id),
+      creator: row.created_by || '',
+      beneficiary: row.beneficiary_address || '',
+      token: row.token_address || '',
+      total_amount: BigInt(row.total_amount || '0'),
+      released_amount: BigInt(row.released_amount || '0'),
+      lock_type: row.lock_type === 0 ? 'TimeLock' : 'Vesting',
+      status: row.is_active ? 'Active' : 'Cancelled',
+      created_at: row.created_at ? Math.floor(new Date(row.created_at).getTime() / 1000) : 0,
+      start_time: row.start_time ? Math.floor(new Date(row.start_time).getTime() / 1000) : 0,
+      end_time: row.end_time ? Math.floor(new Date(row.end_time).getTime() / 1000) : 0,
+      cliff_time: row.cliff_time ? Math.floor(new Date(row.cliff_time).getTime() / 1000) : 0,
+      release_intervals: Number(row.release_intervals || 0),
+      revocable: Boolean(row.revocable),
+      description: row.name || '',
+      total_claimed: row.total_claimed || '0',
+    }));
+  } catch (err) {
+    console.error('loadLocks error:', err);
+    return [];
+  }
+};
+ 
+// Alias for backward compatibility
+export const getLocks = loadLocks;
+ 
+// ============================================================================
+// READ-ONLY: BALANCES
+// ============================================================================
+ 
 export async function loadVaultBalance(vaultAddress: string): Promise<TokenBalance[]> {
   const balances: TokenBalance[] = [];
   const server = getServer();
-
-  // Combine supported tokens with custom tokens
+ 
   const customTokens = getCustomTokens();
   const allTokens = [
     ...SUPPORTED_TOKENS,
@@ -200,40 +239,30 @@ export async function loadVaultBalance(vaultAddress: string): Promise<TokenBalan
       name: t.name,
       decimals: t.decimals,
       icon: t.icon,
-      isNative: false,
-      isSAC: t.isSAC,
-      issuer: t.issuer,
     }))
   ];
-
-  // Remove duplicates (prefer SUPPORTED_TOKENS)
+ 
   const uniqueTokens = allTokens.filter((token, index, self) =>
     index === self.findIndex(t => t.address === token.address)
   );
-
+ 
   for (const token of uniqueTokens) {
     try {
       const contract = new Contract(token.address);
-      const tx = new TransactionBuilder(
-        new Account('GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF', '0'),
-        {
-          fee: BASE_FEE,
-          networkPassphrase: NETWORK_PASSPHRASE,
-        }
-      )
-        .addOperation(
-          contract.call('balance', nativeToScVal(vaultAddress, { type: 'address' }))
-        )
+      const tx = new TransactionBuilder(getTempAccount(), {
+        fee: BASE_FEE,
+        networkPassphrase: NETWORK_PASSPHRASE,
+      })
+        .addOperation(contract.call('balance', new Address(vaultAddress).toScVal()))
         .setTimeout(30)
         .build();
-
+ 
       const simulation = await server.simulateTransaction(tx);
-
       let balance = BigInt(0);
       if (rpc.Api.isSimulationSuccess(simulation) && simulation.result?.retval) {
         balance = BigInt(scValToNative(simulation.result.retval));
       }
-
+ 
       balances.push({
         address: token.address,
         symbol: token.symbol,
@@ -243,7 +272,6 @@ export async function loadVaultBalance(vaultAddress: string): Promise<TokenBalan
         balance,
       });
     } catch (error) {
-      console.error(`Failed to load balance for ${token.symbol}:`, error);
       balances.push({
         address: token.address,
         symbol: token.symbol,
@@ -254,155 +282,14 @@ export async function loadVaultBalance(vaultAddress: string): Promise<TokenBalan
       });
     }
   }
-
+ 
   return balances;
 }
-
-export const loadRemainingSpend = async (vaultAddress: string): Promise<bigint | null> => {
-  try {
-    const contract = getContract(vaultAddress);
-    const server = getServer();
-    const account = getTempAccount();
-    
-    const tx = new TransactionBuilder(account, {
-      fee: BASE_FEE,
-      networkPassphrase: NETWORK_PASSPHRASE,
-    })
-      .addOperation(contract.call('get_remaining_spend', new Address(NATIVE_TOKEN).toScVal()))
-      .setTimeout(30)
-      .build();
-
-    const sim = await server.simulateTransaction(tx);
-
-    if (rpc.Api.isSimulationSuccess(sim) && sim.result?.retval) {
-      return BigInt(scValToNative(sim.result.retval));
-    }
-    return null;
-  } catch {
-    return null;
-  }
-};
-
-export const initializeVault = async (
-  publicKey: string,
-  vaultAddress: string,
-  name: string,
-  signerAddresses: string[],
-  threshold: number
-) => {
-  const server = getServer();
-  const contract = getContract(vaultAddress);
-  const account = await server.getAccount(publicKey);
-
-  if (!signerAddresses.includes(publicKey)) {
-    signerAddresses.unshift(publicKey);
-  }
-
-  const signersScVal = nativeToScVal(
-    signerAddresses.map((s) => new Address(s)),
-    { type: 'Vec' }
-  );
-
-  const tx = new TransactionBuilder(account, {
-    fee: BASE_FEE,
-    networkPassphrase: NETWORK_PASSPHRASE,
-  })
-    .addOperation(
-      contract.call(
-        'initialize',
-        nativeToScVal(name, { type: 'symbol' }),
-        signersScVal,
-        nativeToScVal(threshold, { type: 'u32' })
-      )
-    )
-    .setTimeout(30)
-    .build();
-
-  return signAndSubmit(tx, server);
-};
-
-export const proposeTransfer = async (
-  publicKey: string,
-  vaultAddress: string,
-  token: string,
-  to: string,
-  amount: string
-) => {
-  const server = getServer();
-  const contract = getContract(vaultAddress);
-  const account = await server.getAccount(publicKey);
-
-  const tx = new TransactionBuilder(account, {
-    fee: BASE_FEE,
-    networkPassphrase: NETWORK_PASSPHRASE,
-  })
-    .addOperation(
-      contract.call(
-        'propose',
-        new Address(publicKey).toScVal(),
-        new Address(token).toScVal(),
-        new Address(to).toScVal(),
-        nativeToScVal(BigInt(amount), { type: 'i128' })
-      )
-    )
-    .setTimeout(30)
-    .build();
-
-  return signAndSubmit(tx, server);
-};
-
-export const approveProposal = async (
-  publicKey: string,
-  vaultAddress: string,
-  proposalId: number
-) => {
-  const server = getServer();
-  const contract = getContract(vaultAddress);
-  const account = await server.getAccount(publicKey);
-
-  const tx = new TransactionBuilder(account, {
-    fee: BASE_FEE,
-    networkPassphrase: NETWORK_PASSPHRASE,
-  })
-    .addOperation(
-      contract.call(
-        'approve',
-        new Address(publicKey).toScVal(),
-        nativeToScVal(proposalId, { type: 'u64' })
-      )
-    )
-    .setTimeout(30)
-    .build();
-
-  return signAndSubmit(tx, server);
-};
-
-export const executeProposal = async (
-  publicKey: string,
-  vaultAddress: string,
-  proposalId: number
-) => {
-  const server = getServer();
-  const contract = getContract(vaultAddress);
-  const account = await server.getAccount(publicKey);
-
-  const tx = new TransactionBuilder(account, {
-    fee: BASE_FEE,
-    networkPassphrase: NETWORK_PASSPHRASE,
-  })
-    .addOperation(
-      contract.call(
-        'execute',
-        new Address(publicKey).toScVal(),
-        nativeToScVal(proposalId, { type: 'u64' })
-      )
-    )
-    .setTimeout(30)
-    .build();
-
-  return signAndSubmit(tx, server);
-};
-
+ 
+// ============================================================================
+// WRITE: DEPOSIT (token transfer, not a vault contract call)
+// ============================================================================
+ 
 export const depositToVault = async (
   publicKey: string,
   vaultAddress: string,
@@ -412,7 +299,7 @@ export const depositToVault = async (
   const server = getServer();
   const tokenContract = new Contract(token);
   const account = await server.getAccount(publicKey);
-
+ 
   const tx = new TransactionBuilder(account, {
     fee: BASE_FEE,
     networkPassphrase: NETWORK_PASSPHRASE,
@@ -427,458 +314,227 @@ export const depositToVault = async (
     )
     .setTimeout(30)
     .build();
-
+ 
   return signAndSubmit(tx, server);
 };
-
-export const addSigner = async (
+ 
+// ============================================================================
+// WRITE: PROPOSE (unified function for all proposal types)
+// New contract uses a single `propose` function with proposal_type enum
+// ============================================================================
+ 
+export const proposeTransfer = async (
   publicKey: string,
   vaultAddress: string,
-  newSigner: string
+  token: string,
+  to: string,
+  amount: string
 ) => {
   const server = getServer();
   const contract = getContract(vaultAddress);
   const account = await server.getAccount(publicKey);
-
+ 
+  // ProposalType::Transfer = 0
   const tx = new TransactionBuilder(account, {
-    fee: BASE_FEE,
+    fee: '10000000',
     networkPassphrase: NETWORK_PASSPHRASE,
   })
     .addOperation(
       contract.call(
-        'add_signer',
+        'propose',
         new Address(publicKey).toScVal(),
-        new Address(newSigner).toScVal()
+        nativeToScVal(0, { type: 'u32' }),              // proposal_type: Transfer
+        new Address(token).toScVal(),                     // token
+        new Address(to).toScVal(),                        // recipient
+        nativeToScVal(BigInt(amount), { type: 'i128' }), // amount
+        nativeToScVal(0, { type: 'u64' }),               // start_time
+        nativeToScVal(0, { type: 'u64' }),               // end_time
+        nativeToScVal(0, { type: 'u64' }),               // cliff_time
+        nativeToScVal(0, { type: 'u64' }),               // release_intervals
+        nativeToScVal(false, { type: 'bool' }),          // revocable
+        nativeToScVal('transfer', { type: 'symbol' })    // description
       )
     )
-    .setTimeout(30)
+    .setTimeout(300)
     .build();
-
+ 
   return signAndSubmit(tx, server);
 };
-
-export const getRole = async (vaultAddress: string, member: string): Promise<string | null> => {
-  try {
-    const contract = getContract(vaultAddress);
-    const server = getServer();
-    const account = getTempAccount();
-
-    const tx = new TransactionBuilder(account, {
-      fee: BASE_FEE,
-      networkPassphrase: NETWORK_PASSPHRASE,
-    })
-      .addOperation(contract.call('get_role', new Address(member).toScVal()))
-      .setTimeout(30)
-      .build();
-
-    const sim = await server.simulateTransaction(tx);
-
-    if (rpc.Api.isSimulationSuccess(sim) && sim.result?.retval) {
-      const roleData = scValToNative(sim.result.retval);
-      // Convert from contract enum to string
-      if (roleData === 0 || roleData?.Admin !== undefined) return 'Admin';
-      if (roleData === 1 || roleData?.Executor !== undefined) return 'Executor';
-      if (roleData === 2 || roleData?.Viewer !== undefined) return 'Viewer';
-      return 'Viewer';
-    }
-    return null;
-  } catch {
-    return null;
-  }
-};
-
-export const getAllRoles = async (vaultAddress: string): Promise<Array<{ address: string; role: string }>> => {
-  try {
-    const contract = getContract(vaultAddress);
-    const server = getServer();
-    const account = getTempAccount();
-
-    const tx = new TransactionBuilder(account, {
-      fee: BASE_FEE,
-      networkPassphrase: NETWORK_PASSPHRASE,
-    })
-      .addOperation(contract.call('get_all_roles'))
-      .setTimeout(30)
-      .build();
-
-    const sim = await server.simulateTransaction(tx);
-
-    if (rpc.Api.isSimulationSuccess(sim) && sim.result?.retval) {
-      const rolesData = scValToNative(sim.result.retval);
-      return rolesData.map((item: any) => {
-        const [addr, roleVal] = item;
-        let role = 'Viewer';
-        if (roleVal === 0 || roleVal?.Admin !== undefined) role = 'Admin';
-        else if (roleVal === 1 || roleVal?.Executor !== undefined) role = 'Executor';
-        return {
-          address: addr.toString(),
-          role,
-        };
-      });
-    }
-    return [];
-  } catch (err) {
-    console.error('getAllRoles error:', err);
-    return [];
-  }
-};
-
-export const loadAllTokenBalances = async (vaultAddress: string): Promise<TokenBalance[]> => {
-  const balances: TokenBalance[] = [];
-  
-  for (const token of SUPPORTED_TOKENS) {
-    try {
-      const tokenContract = new Contract(token.address);
-      const server = getServer();
-      const account = getTempAccount();
-      
-      const tx = new TransactionBuilder(account, {
-        fee: BASE_FEE,
-        networkPassphrase: NETWORK_PASSPHRASE,
-      })
-        .addOperation(tokenContract.call('balance', new Address(vaultAddress).toScVal()))
-        .setTimeout(30)
-        .build();
-
-      const sim = await server.simulateTransaction(tx);
-
-      if (rpc.Api.isSimulationSuccess(sim) && sim.result?.retval) {
-        const balance = scValToNative(sim.result.retval);
-        balances.push({
-          address: token.address,
-          symbol: token.symbol,
-          balance: BigInt(balance),
-          decimals: token.decimals,
-          name: token.name,
-          icon: token.icon,
-        });
-      }
-    } catch (err) {
-      // Token might not exist or no balance, add with 0
-      balances.push({
-        address: token.address,
-        symbol: token.symbol,
-        balance: BigInt(0),
-        decimals: token.decimals,
-        name: token.name,
-        icon: token.icon,
-      });
-    }
-  }
-  
-  return balances;
-};
-
-// Get token issuer from SAC contract
-export const getTokenIssuer = async (tokenAddress: string): Promise<string | null> => {
-  try {
-    const tokenContract = new Contract(tokenAddress);
-    const server = getServer();
-    const account = getTempAccount();
-
-    const tx = new TransactionBuilder(account, {
-      fee: BASE_FEE,
-      networkPassphrase: NETWORK_PASSPHRASE,
-    })
-      .addOperation(tokenContract.call('admin'))
-      .setTimeout(30)
-      .build();
-
-    const sim = await server.simulateTransaction(tx);
-
-    if (rpc.Api.isSimulationSuccess(sim) && sim.result?.retval) {
-      return scValToNative(sim.result.retval);
-    }
-    return null;
-  } catch {
-    return null;
-  }
-};
-
-export async function isSACToken(tokenAddress: string): Promise<boolean> {
-  // Native XLM is always a SAC
-  if (tokenAddress === NATIVE_TOKEN) {
-    return true;
-  }
-
-  try {
-    const server = getServer();
-    const contract = new Contract(tokenAddress);
-    
-    // Try to call the admin function - SAC tokens have this
-    const tx = new TransactionBuilder(
-      new Account('GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF', '0'),
-      {
-        fee: BASE_FEE,
-        networkPassphrase: NETWORK_PASSPHRASE,
-      }
-    )
-      .addOperation(contract.call('admin'))
-      .setTimeout(30)
-      .build();
-
-    const simulation = await server.simulateTransaction(tx);
-    
-    if (rpc.Api.isSimulationSuccess(simulation) && simulation.result?.retval) {
-      const adminAddress = scValToNative(simulation.result.retval);
-      // SAC tokens have a G... address as admin (Stellar account)
-      // Pure Soroban tokens have a C... address (contract) or no admin
-      return typeof adminAddress === 'string' && adminAddress.startsWith('G');
-    }
-    
-    return false;
-  } catch (error) {
-    // If admin() call fails, it's likely a pure Soroban token
-    console.log(`Token ${tokenAddress} admin check failed:`, error);
-    return false;
-  }
-}
-
-// Check if an account has a trustline for a SAC token
-export const hasTrustline = async (
-  accountAddress: string,
-  tokenAddress: string
-): Promise<boolean> => {
-  // Native XLM doesn't need trustline
-  if (tokenAddress === NATIVE_TOKEN) {
-    return true;
-  }
-
-  // First check if it's a SAC token
-  const isSAC = await isSACToken(tokenAddress);
-  if (!isSAC) {
-    // Pure Soroban tokens don't need trustlines
-    return true;
-  }
-
-  try {
-    const tokenContract = new Contract(tokenAddress);
-    const server = getServer();
-    const account = getTempAccount();
-
-    const tx = new TransactionBuilder(account, {
-      fee: BASE_FEE,
-      networkPassphrase: NETWORK_PASSPHRASE,
-    })
-      .addOperation(tokenContract.call('balance', new Address(accountAddress).toScVal()))
-      .setTimeout(30)
-      .build();
-
-    const sim = await server.simulateTransaction(tx);
-    return rpc.Api.isSimulationSuccess(sim);
-  } catch {
-    return false;
-  }
-};
-
-// Create a trustline for a SAC token
-export const createTrustline = async (
+ 
+// ============================================================================
+// WRITE: APPROVE PROPOSAL
+// ============================================================================
+ 
+export const approveProposal = async (
   publicKey: string,
-  assetCode: string,
-  issuer: string
-): Promise<any> => {
+  vaultAddress: string,
+  proposalId: number
+) => {
   const server = getServer();
+  const contract = getContract(vaultAddress);
   const account = await server.getAccount(publicKey);
-
-  const { Asset, Operation } = await import('@stellar/stellar-sdk');
-  const asset = new Asset(assetCode, issuer);
-
+ 
   const tx = new TransactionBuilder(account, {
-    fee: BASE_FEE,
+    fee: '10000000',
     networkPassphrase: NETWORK_PASSPHRASE,
   })
-    .addOperation(Operation.changeTrust({ asset }))
-    .setTimeout(30)
+    .addOperation(
+      contract.call(
+        'approve',
+        new Address(publicKey).toScVal(),
+        nativeToScVal(proposalId, { type: 'u64' })
+      )
+    )
+    .setTimeout(300)
     .build();
-
+ 
   return signAndSubmit(tx, server);
 };
-
-// Get token info including whether it needs trustline
-export async function getTokenInfo(tokenAddress: string): Promise<{
-  symbol: string;
-  name: string;
-  decimals: number;
-  issuer: string | null;
-} | null> {
-  try {
-    const server = getServer();
-    const contract = new Contract(tokenAddress);
-    const tempAccount = new Account('GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF', '0');
-
-    // Get symbol
-    const symbolTx = new TransactionBuilder(tempAccount, {
-      fee: BASE_FEE,
-      networkPassphrase: NETWORK_PASSPHRASE,
-    })
-      .addOperation(contract.call('symbol'))
-      .setTimeout(30)
-      .build();
-
-    const symbolSim = await server.simulateTransaction(symbolTx);
-    let symbol = 'UNKNOWN';
-    if (rpc.Api.isSimulationSuccess(symbolSim) && symbolSim.result?.retval) {
-      symbol = scValToNative(symbolSim.result.retval);
-    }
-
-    // Get name
-    const nameTx = new TransactionBuilder(tempAccount, {
-      fee: BASE_FEE,
-      networkPassphrase: NETWORK_PASSPHRASE,
-    })
-      .addOperation(contract.call('name'))
-      .setTimeout(30)
-      .build();
-
-    const nameSim = await server.simulateTransaction(nameTx);
-    let name = symbol;
-    if (rpc.Api.isSimulationSuccess(nameSim) && nameSim.result?.retval) {
-      name = scValToNative(nameSim.result.retval);
-    }
-
-    // Get decimals
-    const decimalsTx = new TransactionBuilder(tempAccount, {
-      fee: BASE_FEE,
-      networkPassphrase: NETWORK_PASSPHRASE,
-    })
-      .addOperation(contract.call('decimals'))
-      .setTimeout(30)
-      .build();
-
-    const decimalsSim = await server.simulateTransaction(decimalsTx);
-    let decimals = 7;
-    if (rpc.Api.isSimulationSuccess(decimalsSim) && decimalsSim.result?.retval) {
-      decimals = scValToNative(decimalsSim.result.retval);
-    }
-
-    // Get issuer (admin) for SAC tokens
-    let issuer: string | null = null;
-    try {
-      const adminTx = new TransactionBuilder(tempAccount, {
-        fee: BASE_FEE,
-        networkPassphrase: NETWORK_PASSPHRASE,
-      })
-        .addOperation(contract.call('admin'))
-        .setTimeout(30)
-        .build();
-
-      const adminSim = await server.simulateTransaction(adminTx);
-      if (rpc.Api.isSimulationSuccess(adminSim) && adminSim.result?.retval) {
-        const admin = scValToNative(adminSim.result.retval);
-        if (typeof admin === 'string' && admin.startsWith('G')) {
-          issuer = admin;
-        }
-      }
-    } catch {
-      // Not a SAC token or no admin function
-    }
-
-    return { symbol, name, decimals, issuer };
-  } catch (error) {
-    console.error('Failed to get token info:', error);
-    return null;
-  }
-}
-
-// Ensure trustline exists (only for SAC tokens)
-export const ensureTrustline = async (
+ 
+// ============================================================================
+// WRITE: REJECT PROPOSAL (replaces request_cancel / approve_cancel)
+// ============================================================================
+ 
+export const rejectProposal = async (
   publicKey: string,
-  tokenAddress: string,
-  assetCode: string,
-  issuer?: string
-): Promise<boolean> => {
-  // Native XLM doesn't need trustline
-  if (tokenAddress === NATIVE_TOKEN) {
-    return true;
-  }
-
-  // Check if it's a SAC token
-  const isSAC = await isSACToken(tokenAddress);
-  if (!isSAC) {
-    // Pure Soroban token, no trustline needed
-    return true;
-  }
-
-  // Check if trustline already exists
-  const hasTrust = await hasTrustline(publicKey, tokenAddress);
-  if (hasTrust) {
-    return true;
-  }
-
-  // Get issuer if not provided
-  let tokenIssuer: string | undefined = issuer;
-  if (!tokenIssuer) {
-    const info = await getTokenInfo(tokenAddress);
-    tokenIssuer = info?.issuer ?? undefined;  // Convert null to undefined
-  }
-
-  if (!tokenIssuer) {
-    throw new Error('Could not find token issuer');
-  }
-
-  await createTrustline(publicKey, assetCode, tokenIssuer);
-  return true;
+  vaultAddress: string,
+  proposalId: number
+) => {
+  const server = getServer();
+  const contract = getContract(vaultAddress);
+  const account = await server.getAccount(publicKey);
+ 
+  const tx = new TransactionBuilder(account, {
+    fee: '10000000',
+    networkPassphrase: NETWORK_PASSPHRASE,
+  })
+    .addOperation(
+      contract.call(
+        'reject',
+        new Address(publicKey).toScVal(),
+        nativeToScVal(proposalId, { type: 'u64' })
+      )
+    )
+    .setTimeout(300)
+    .build();
+ 
+  return signAndSubmit(tx, server);
 };
+ 
+// Backward compat aliases
+export const requestCancelProposal = rejectProposal;
+export const approveCancelProposal = rejectProposal;
+export const executeCancelProposal = rejectProposal;
+ 
+// ============================================================================
+// WRITE: EXECUTE PROPOSAL
+// New contract requires all proposal params to be passed at execution
+// ============================================================================
+ 
+export const executeProposal = async (
+  publicKey: string,
+  vaultAddress: string,
+  proposalId: number,
+  proposal?: Proposal
+) => {
+  const server = getServer();
+  const contract = getContract(vaultAddress);
+  const account = await server.getAccount(publicKey);
+ 
+  // If proposal details provided, use them; otherwise use defaults for transfer
+  const pType = proposal?.proposal_type ?? 0;
+  const token = proposal?.token || getNativeToken();
+  const recipient = proposal?.recipient || publicKey;
+  const amount = proposal?.amount ? BigInt(proposal.amount) : BigInt(0);
+  const startTime = proposal?.lock_start_time ?? 0;
+  const endTime = proposal?.lock_end_time ?? 0;
+  const cliffTime = proposal?.lock_cliff_time ?? 0;
+  const releaseIntervals = proposal?.lock_release_intervals ?? 0;
+  const revocable = proposal?.lock_revocable ?? false;
 
-export function deriveSACAddress(assetCode: string, issuer: string): string {
-  try {
-    // For native XLM
-    if (assetCode === 'XLM' && (!issuer || issuer === 'native')) {
-      return NATIVE_TOKEN;
-    }
-
-    // Create the Stellar asset
-    const asset = new Asset(assetCode, issuer);
-    
-    // Get the contract ID for this asset
-    // The SDK provides a method to get the contract ID from an asset
-    const contractId = asset.contractId(NETWORK_PASSPHRASE);
-    
-    return contractId;
-  } catch (error) {
-    console.error('Failed to derive SAC address:', error);
-    return '';
-  }
-}
-
+  console.log('executeProposal params:', {
+    publicKey,
+    vaultAddress,
+    proposalId,
+    pType,
+    token,
+    recipient,
+    amount: amount.toString(),
+    startTime,
+    endTime,
+    cliffTime,
+    releaseIntervals,
+    revocable,
+    proposal
+  });
+ 
+  const tx = new TransactionBuilder(account, {
+    fee: '10000000',
+    networkPassphrase: NETWORK_PASSPHRASE,
+  })
+    .addOperation(
+      contract.call(
+        'execute',
+        new Address(publicKey).toScVal(),
+        nativeToScVal(proposalId, { type: 'u64' }),
+        nativeToScVal(pType, { type: 'u32' }),
+        new Address(token).toScVal(),
+        new Address(recipient).toScVal(),
+        nativeToScVal(amount, { type: 'i128' }),
+        nativeToScVal(startTime, { type: 'u64' }),
+        nativeToScVal(endTime, { type: 'u64' }),
+        nativeToScVal(cliffTime, { type: 'u64' }),
+        nativeToScVal(releaseIntervals, { type: 'u64' }),
+        nativeToScVal(revocable, { type: 'bool' })
+      )
+    )
+    .setTimeout(300)
+    .build();
+ 
+  return signAndSubmit(tx, server);
+};
+ 
+// ============================================================================
+// WRITE: SIGNER MANAGEMENT
+// ============================================================================
+ 
 export async function addSignerWithRole(
   publicKey: string,
   vaultAddress: string,
   newSigner: string,
   roleValue: number
 ): Promise<void> {
-  console.log('=== addSignerWithRole ===');
-  console.log('publicKey:', publicKey);
-  console.log('vaultAddress:', vaultAddress);
-  console.log('newSigner:', newSigner);
-  console.log('roleValue:', roleValue);
-
   const server = getServer();
   const contract = getContract(vaultAddress);
   const account = await server.getAccount(publicKey);
-
-  // The contract's add_signer function now handles fee collection internally
-  // Parameters: admin (Address), new_signer (Address), role (u32)
+ 
   const tx = new TransactionBuilder(account, {
-    fee: BASE_FEE,
+    fee: '10000000',
     networkPassphrase: NETWORK_PASSPHRASE,
   })
     .addOperation(
       contract.call(
         'add_signer',
-        nativeToScVal(publicKey, { type: 'address' }),
-        nativeToScVal(newSigner, { type: 'address' }),
+        new Address(publicKey).toScVal(),
+        new Address(newSigner).toScVal(),
         nativeToScVal(roleValue, { type: 'u32' })
       )
     )
-    .setTimeout(30)
+    .setTimeout(300)
     .build();
-
-  console.log('Transaction built, submitting...');
+ 
   await signAndSubmit(tx, server);
-  console.log('=== addSignerWithRole SUCCESS ===');
 }
-
+ 
+// Simple addSigner that defaults to Executor role
+export const addSigner = async (
+  publicKey: string,
+  vaultAddress: string,
+  newSigner: string
+) => {
+  return addSignerWithRole(publicKey, vaultAddress, newSigner, 2);
+};
+ 
 export async function removeSigner(
   publicKey: string,
   vaultAddress: string,
@@ -887,24 +543,24 @@ export async function removeSigner(
   const server = getServer();
   const contract = getContract(vaultAddress);
   const account = await server.getAccount(publicKey);
-  
+ 
   const tx = new TransactionBuilder(account, {
-    fee: BASE_FEE,
+    fee: '10000000',
     networkPassphrase: NETWORK_PASSPHRASE,
   })
     .addOperation(
       contract.call(
         'remove_signer',
-        nativeToScVal(publicKey, { type: 'address' }),
-        nativeToScVal(signerToRemove, { type: 'address' })
+        new Address(publicKey).toScVal(),
+        new Address(signerToRemove).toScVal()
       )
     )
-    .setTimeout(30)
+    .setTimeout(300)
     .build();
-
+ 
   await signAndSubmit(tx, server);
 }
-
+ 
 export async function setRole(
   publicKey: string,
   vaultAddress: string,
@@ -914,25 +570,25 @@ export async function setRole(
   const server = getServer();
   const contract = getContract(vaultAddress);
   const account = await server.getAccount(publicKey);
-  
+ 
   const tx = new TransactionBuilder(account, {
-    fee: BASE_FEE,
+    fee: '10000000',
     networkPassphrase: NETWORK_PASSPHRASE,
   })
     .addOperation(
       contract.call(
         'set_role',
-        nativeToScVal(publicKey, { type: 'address' }),
-        nativeToScVal(member, { type: 'address' }),
+        new Address(publicKey).toScVal(),
+        new Address(member).toScVal(),
         nativeToScVal(roleValue, { type: 'u32' })
       )
     )
-    .setTimeout(30)
+    .setTimeout(300)
     .build();
-
+ 
   await signAndSubmit(tx, server);
 }
-
+ 
 export async function setThreshold(
   publicKey: string,
   vaultAddress: string,
@@ -941,73 +597,49 @@ export async function setThreshold(
   const server = getServer();
   const contract = getContract(vaultAddress);
   const account = await server.getAccount(publicKey);
-  
+ 
   const tx = new TransactionBuilder(account, {
-    fee: BASE_FEE,
+    fee: '10000000',
     networkPassphrase: NETWORK_PASSPHRASE,
   })
     .addOperation(
       contract.call(
         'set_threshold',
-        nativeToScVal(publicKey, { type: 'address' }),
+        new Address(publicKey).toScVal(),
         nativeToScVal(newThreshold, { type: 'u32' })
       )
     )
-    .setTimeout(30)
+    .setTimeout(300)
     .build();
-
+ 
   await signAndSubmit(tx, server);
 }
-
+ 
 export async function leaveVault(publicKey: string, vaultAddress: string): Promise<void> {
   const server = getServer();
   const contract = getContract(vaultAddress);
   const account = await server.getAccount(publicKey);
-  
+ 
   const tx = new TransactionBuilder(account, {
-    fee: BASE_FEE,
+    fee: '10000000',
     networkPassphrase: NETWORK_PASSPHRASE,
   })
     .addOperation(
       contract.call(
         'leave_vault',
-        nativeToScVal(publicKey, { type: 'address' })
+        new Address(publicKey).toScVal()
       )
     )
-    .setTimeout(30)
+    .setTimeout(300)
     .build();
-
+ 
   await signAndSubmit(tx, server);
 }
-
-export async function setSpendLimit(
-  publicKey: string,
-  vaultAddress: string,
-  token: string,
-  dailyLimit: bigint
-): Promise<void> {
-  const server = getServer();
-  const contract = getContract(vaultAddress);
-  const account = await server.getAccount(publicKey);
-
-  const tx = new TransactionBuilder(account, {
-    fee: BASE_FEE,
-    networkPassphrase: NETWORK_PASSPHRASE,
-  })
-    .addOperation(
-      contract.call(
-        'set_spend_limit',
-        nativeToScVal(publicKey, { type: 'address' }),
-        nativeToScVal(token, { type: 'address' }),
-        nativeToScVal(dailyLimit, { type: 'i128' })
-      )
-    )
-    .setTimeout(30)
-    .build();
-
-  await signAndSubmit(tx, server);
-}
-
+ 
+// ============================================================================
+// WRITE: TIME LOCK (uses unified propose with ProposalType::TimeLock = 1)
+// ============================================================================
+ 
 export async function createTimeLock(
   publicKey: string,
   vaultAddress: string,
@@ -1016,38 +648,47 @@ export async function createTimeLock(
   amount: bigint,
   unlockTime: number,
   revocable: boolean,
-  description: string
+  lock_description: string
 ): Promise<number> {
   const server = getServer();
   const contract = getContract(vaultAddress);
   const account = await server.getAccount(publicKey);
-
+  const now = Math.floor(Date.now() / 1000);
+ 
   const tx = new TransactionBuilder(account, {
-    fee: BASE_FEE,
+    fee: '10000000',
     networkPassphrase: NETWORK_PASSPHRASE,
   })
     .addOperation(
       contract.call(
-        'create_time_lock',
-        nativeToScVal(publicKey, { type: 'address' }),
-        nativeToScVal(beneficiary, { type: 'address' }),
-        nativeToScVal(token, { type: 'address' }),
+        'propose',
+        new Address(publicKey).toScVal(),
+        nativeToScVal(1, { type: 'u32' }),               // ProposalType::TimeLock
+        new Address(token).toScVal(),
+        new Address(beneficiary).toScVal(),
         nativeToScVal(amount, { type: 'i128' }),
-        nativeToScVal(unlockTime, { type: 'u64' }),
+        nativeToScVal(now, { type: 'u64' }),              // start_time
+        nativeToScVal(unlockTime, { type: 'u64' }),       // end_time
+        nativeToScVal(0, { type: 'u64' }),                // cliff_time (not used for time lock)
+        nativeToScVal(0, { type: 'u64' }),                // release_intervals
         nativeToScVal(revocable, { type: 'bool' }),
-        nativeToScVal(description || 'lock', { type: 'symbol' })
+        nativeToScVal(sanitizeSymbol(lock_description), { type: 'symbol' })
       )
     )
-    .setTimeout(30)
+    .setTimeout(300)
     .build();
-
+ 
   const result = await signAndSubmit(tx, server);
   if (result.status === 'SUCCESS' && 'returnValue' in result && result.returnValue) {
     return Number(scValToNative(result.returnValue));
   }
   return 0;
 }
-
+ 
+// ============================================================================
+// WRITE: VESTING LOCK (uses unified propose with ProposalType::VestingLock = 2)
+// ============================================================================
+ 
 export async function createVestingLock(
   publicKey: string,
   vaultAddress: string,
@@ -1059,41 +700,50 @@ export async function createVestingLock(
   totalDuration: number,
   releaseIntervals: number,
   revocable: boolean,
-  description: string
+  lock_description: string
 ): Promise<number> {
   const server = getServer();
   const contract = getContract(vaultAddress);
   const account = await server.getAccount(publicKey);
-
+ 
+  const actualStart = startTime > 0 ? startTime : Math.floor(Date.now() / 1000);
+  const cliffTime = actualStart + cliffDuration;
+  const endTime = actualStart + totalDuration;
+ 
   const tx = new TransactionBuilder(account, {
-    fee: BASE_FEE,
+    fee: '10000000',
     networkPassphrase: NETWORK_PASSPHRASE,
   })
     .addOperation(
       contract.call(
-        'create_vesting_lock',
-        nativeToScVal(publicKey, { type: 'address' }),
-        nativeToScVal(beneficiary, { type: 'address' }),
-        nativeToScVal(token, { type: 'address' }),
+        'propose',
+        new Address(publicKey).toScVal(),
+        nativeToScVal(2, { type: 'u32' }),               // ProposalType::VestingLock
+        new Address(token).toScVal(),
+        new Address(beneficiary).toScVal(),
         nativeToScVal(amount, { type: 'i128' }),
-        nativeToScVal(startTime, { type: 'u64' }),
-        nativeToScVal(cliffDuration, { type: 'u64' }),
-        nativeToScVal(totalDuration, { type: 'u64' }),
+        nativeToScVal(actualStart, { type: 'u64' }),
+        nativeToScVal(endTime, { type: 'u64' }),
+        nativeToScVal(cliffTime, { type: 'u64' }),
         nativeToScVal(releaseIntervals, { type: 'u64' }),
         nativeToScVal(revocable, { type: 'bool' }),
-        nativeToScVal(description || 'lock', { type: 'symbol' })
+        nativeToScVal(sanitizeSymbol(lock_description), { type: 'symbol' })
       )
     )
-    .setTimeout(30)
+    .setTimeout(300)
     .build();
-
+ 
   const result = await signAndSubmit(tx, server);
   if (result.status === 'SUCCESS' && 'returnValue' in result && result.returnValue) {
     return Number(scValToNative(result.returnValue));
   }
   return 0;
 }
-
+ 
+// ============================================================================
+// WRITE: CLAIM / CANCEL LOCK
+// ============================================================================
+ 
 export async function claimLock(
   publicKey: string,
   vaultAddress: string,
@@ -1102,28 +752,28 @@ export async function claimLock(
   const server = getServer();
   const contract = getContract(vaultAddress);
   const account = await server.getAccount(publicKey);
-
+ 
   const tx = new TransactionBuilder(account, {
-    fee: BASE_FEE,
+    fee: '10000000',
     networkPassphrase: NETWORK_PASSPHRASE,
   })
     .addOperation(
       contract.call(
         'claim_lock',
-        nativeToScVal(publicKey, { type: 'address' }),
+        new Address(publicKey).toScVal(),
         nativeToScVal(lockId, { type: 'u64' })
       )
     )
-    .setTimeout(30)
+    .setTimeout(300)
     .build();
-
+ 
   const result = await signAndSubmit(tx, server);
   if (result.status === 'SUCCESS' && 'returnValue' in result && result.returnValue) {
     return BigInt(scValToNative(result.returnValue));
   }
   return BigInt(0);
 }
-
+ 
 export async function cancelLock(
   publicKey: string,
   vaultAddress: string,
@@ -1132,164 +782,304 @@ export async function cancelLock(
   const server = getServer();
   const contract = getContract(vaultAddress);
   const account = await server.getAccount(publicKey);
-
+ 
   const tx = new TransactionBuilder(account, {
-    fee: BASE_FEE,
+    fee: '10000000',
     networkPassphrase: NETWORK_PASSPHRASE,
   })
     .addOperation(
       contract.call(
         'cancel_lock',
-        nativeToScVal(publicKey, { type: 'address' }),
+        new Address(publicKey).toScVal(),
         nativeToScVal(lockId, { type: 'u64' })
       )
     )
-    .setTimeout(30)
+    .setTimeout(300)
     .build();
-
+ 
   const result = await signAndSubmit(tx, server);
   if (result.status === 'SUCCESS' && 'returnValue' in result && result.returnValue) {
     return BigInt(scValToNative(result.returnValue));
   }
   return BigInt(0);
 }
-
-export async function getLock(
-  vaultAddress: string,
-  lockId: number
-): Promise<any> {
+ 
+// ============================================================================
+// READ-ONLY: LOCK QUERIES (from contract for on-chain state)
+// ============================================================================
+ 
+export async function getLock(vaultAddress: string, lockId: number): Promise<any> {
   const server = getServer();
   const contract = getContract(vaultAddress);
-
-  const tx = new TransactionBuilder(
-    new Account('GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF', '0'),
-    { fee: BASE_FEE, networkPassphrase: NETWORK_PASSPHRASE }
-  )
+  const tx = new TransactionBuilder(getTempAccount(), {
+    fee: BASE_FEE,
+    networkPassphrase: NETWORK_PASSPHRASE,
+  })
     .addOperation(contract.call('get_lock', nativeToScVal(lockId, { type: 'u64' })))
     .setTimeout(30)
     .build();
-
+ 
   const result = await server.simulateTransaction(tx);
   if (rpc.Api.isSimulationSuccess(result) && result.result?.retval) {
     return scValToNative(result.result.retval);
   }
   return null;
 }
-
-export async function getLockInfo(
-  vaultAddress: string,
-  lockId: number
-): Promise<any> {
+ 
+export async function getTokenLockedAmount(vaultAddress: string, token: string): Promise<bigint> {
   const server = getServer();
   const contract = getContract(vaultAddress);
-
-  const tx = new TransactionBuilder(
-    new Account('GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF', '0'),
-    { fee: BASE_FEE, networkPassphrase: NETWORK_PASSPHRASE }
-  )
-    .addOperation(contract.call('get_lock_info', nativeToScVal(lockId, { type: 'u64' })))
+  const tx = new TransactionBuilder(getTempAccount(), {
+    fee: BASE_FEE,
+    networkPassphrase: NETWORK_PASSPHRASE,
+  })
+    .addOperation(contract.call('get_token_locked', new Address(token).toScVal()))
     .setTimeout(30)
     .build();
-
-  const result = await server.simulateTransaction(tx);
-  if (rpc.Api.isSimulationSuccess(result) && result.result?.retval) {
-    return scValToNative(result.result.retval);
-  }
-  return null;
-}
-
-export async function getLockCount(vaultAddress: string): Promise<number> {
-  const server = getServer();
-  const contract = getContract(vaultAddress);
-
-  const tx = new TransactionBuilder(
-    new Account('GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF', '0'),
-    { fee: BASE_FEE, networkPassphrase: NETWORK_PASSPHRASE }
-  )
-    .addOperation(contract.call('get_lock_count'))
-    .setTimeout(30)
-    .build();
-
-  const result = await server.simulateTransaction(tx);
-  if (rpc.Api.isSimulationSuccess(result) && result.result?.retval) {
-    return Number(scValToNative(result.result.retval));
-  }
-  return 0;
-}
-
-export async function getLocks(
-  vaultAddress: string,
-  start: number = 0,
-  limit: number = 50
-): Promise<any[]> {
-  const server = getServer();
-  const contract = getContract(vaultAddress);
-
-  const tx = new TransactionBuilder(
-    new Account('GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF', '0'),
-    { fee: BASE_FEE, networkPassphrase: NETWORK_PASSPHRASE }
-  )
-    .addOperation(
-      contract.call(
-        'get_locks',
-        nativeToScVal(start, { type: 'u64' }),
-        nativeToScVal(limit, { type: 'u64' })
-      )
-    )
-    .setTimeout(30)
-    .build();
-
-  const result = await server.simulateTransaction(tx);
-  if (rpc.Api.isSimulationSuccess(result) && result.result?.retval) {
-    return scValToNative(result.result.retval) || [];
-  }
-  return [];
-}
-
-export async function getTokenLockedAmount(
-  vaultAddress: string,
-  token: string
-): Promise<bigint> {
-  const server = getServer();
-  const contract = getContract(vaultAddress);
-
-  const tx = new TransactionBuilder(
-    new Account('GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF', '0'),
-    { fee: BASE_FEE, networkPassphrase: NETWORK_PASSPHRASE }
-  )
-    .addOperation(
-      contract.call('get_token_locked_amount', nativeToScVal(token, { type: 'address' }))
-    )
-    .setTimeout(30)
-    .build();
-
+ 
   const result = await server.simulateTransaction(tx);
   if (rpc.Api.isSimulationSuccess(result) && result.result?.retval) {
     return BigInt(scValToNative(result.result.retval));
   }
   return BigInt(0);
 }
-
-export async function getAvailableBalance(
-  vaultAddress: string,
-  token: string
-): Promise<bigint> {
+ 
+export async function getAvailableBalance(vaultAddress: string, token: string): Promise<bigint> {
   const server = getServer();
   const contract = getContract(vaultAddress);
-
-  const tx = new TransactionBuilder(
-    new Account('GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF', '0'),
-    { fee: BASE_FEE, networkPassphrase: NETWORK_PASSPHRASE }
-  )
-    .addOperation(
-      contract.call('get_available_balance', nativeToScVal(token, { type: 'address' }))
-    )
+  const tx = new TransactionBuilder(getTempAccount(), {
+    fee: BASE_FEE,
+    networkPassphrase: NETWORK_PASSPHRASE,
+  })
+    .addOperation(contract.call('get_available_balance', new Address(token).toScVal()))
     .setTimeout(30)
     .build();
-
+ 
   const result = await server.simulateTransaction(tx);
   if (rpc.Api.isSimulationSuccess(result) && result.result?.retval) {
     return BigInt(scValToNative(result.result.retval));
   }
   return BigInt(0);
 }
+ 
+// ============================================================================
+// REMOVED FUNCTIONS (not in new contract)
+// Kept as no-ops for backward compatibility
+// ============================================================================
+ 
+export const loadRemainingSpend = async (_vaultAddress: string): Promise<bigint | null> => null;
+ 
+export async function setSpendLimit(
+  _publicKey: string,
+  _vaultAddress: string,
+  _token: string,
+  _dailyLimit: bigint
+): Promise<void> {
+  console.warn('setSpendLimit is not available in the new contract');
+}
+ 
+export const initializeVault = async (
+  _publicKey: string,
+  _vaultAddress: string,
+  _name: string,
+  _signerAddresses: string[],
+  _threshold: number
+) => {
+  console.warn('initializeVault: vaults are now initialized by the factory');
+};
+ 
+export const getAllRoles = async (vaultAddress: string): Promise<Array<{ address: string; role: string }>> => {
+  // New contract has no get_all_roles; iterate signers and call get_role
+  try {
+    const signerList = await loadSigners(vaultAddress);
+    const roles: Array<{ address: string; role: string }> = [];
+    for (const signer of signerList) {
+      const role = await getRole(vaultAddress, signer);
+      roles.push({ address: signer, role: role || 'Executor' });
+    }
+    return roles;
+  } catch {
+    return [];
+  }
+};
+ 
+export const loadAllTokenBalances = loadVaultBalance;
+ 
+// ============================================================================
+// TOKEN UTILITIES (unchanged)
+// ============================================================================
+ 
+export const getTokenIssuer = async (tokenAddress: string): Promise<string | null> => {
+  try {
+    const tokenContract = new Contract(tokenAddress);
+    const server = getServer();
+    const tx = new TransactionBuilder(getTempAccount(), {
+      fee: BASE_FEE,
+      networkPassphrase: NETWORK_PASSPHRASE,
+    })
+      .addOperation(tokenContract.call('admin'))
+      .setTimeout(30)
+      .build();
+ 
+    const sim = await server.simulateTransaction(tx);
+    if (rpc.Api.isSimulationSuccess(sim) && sim.result?.retval) {
+      return scValToNative(sim.result.retval);
+    }
+    return null;
+  } catch {
+    return null;
+  }
+};
+ 
+export async function isSACToken(tokenAddress: string): Promise<boolean> {
+  if (tokenAddress === getNativeToken()) return true;
+  try {
+    const server = getServer();
+    const contract = new Contract(tokenAddress);
+    const tx = new TransactionBuilder(getTempAccount(), {
+      fee: BASE_FEE,
+      networkPassphrase: NETWORK_PASSPHRASE,
+    })
+      .addOperation(contract.call('admin'))
+      .setTimeout(30)
+      .build();
+ 
+    const simulation = await server.simulateTransaction(tx);
+    if (rpc.Api.isSimulationSuccess(simulation) && simulation.result?.retval) {
+      const adminAddress = scValToNative(simulation.result.retval);
+      return typeof adminAddress === 'string' && adminAddress.startsWith('G');
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+ 
+export const hasTrustline = async (accountAddress: string, tokenAddress: string): Promise<boolean> => {
+  if (tokenAddress === getNativeToken()) return true;
+  const isSAC = await isSACToken(tokenAddress);
+  if (!isSAC) return true;
+ 
+  try {
+    const tokenContract = new Contract(tokenAddress);
+    const server = getServer();
+    const tx = new TransactionBuilder(getTempAccount(), {
+      fee: BASE_FEE,
+      networkPassphrase: NETWORK_PASSPHRASE,
+    })
+      .addOperation(tokenContract.call('balance', new Address(accountAddress).toScVal()))
+      .setTimeout(30)
+      .build();
+ 
+    const sim = await server.simulateTransaction(tx);
+    return rpc.Api.isSimulationSuccess(sim);
+  } catch {
+    return false;
+  }
+};
+ 
+export const createTrustline = async (publicKey: string, assetCode: string, issuer: string): Promise<any> => {
+  const server = getServer();
+  const account = await server.getAccount(publicKey);
+  const { Asset, Operation } = await import('@stellar/stellar-sdk');
+  const asset = new Asset(assetCode, issuer);
+  const tx = new TransactionBuilder(account, {
+    fee: BASE_FEE,
+    networkPassphrase: NETWORK_PASSPHRASE,
+  })
+    .addOperation(Operation.changeTrust({ asset }))
+    .setTimeout(30)
+    .build();
+  return signAndSubmit(tx, server);
+};
+ 
+export async function getTokenInfo(tokenAddress: string): Promise<{
+  symbol: string;
+  name: string;
+  decimals: number;
+  issuer: string | null;
+} | null> {
+  try {
+    const server = getServer();
+    const contract = new Contract(tokenAddress);
+    const tempAccount = getTempAccount();
+ 
+    const symbolTx = new TransactionBuilder(tempAccount, { fee: BASE_FEE, networkPassphrase: NETWORK_PASSPHRASE })
+      .addOperation(contract.call('symbol')).setTimeout(30).build();
+    const symbolSim = await server.simulateTransaction(symbolTx);
+    let symbol = 'UNKNOWN';
+    if (rpc.Api.isSimulationSuccess(symbolSim) && symbolSim.result?.retval) {
+      symbol = scValToNative(symbolSim.result.retval);
+    }
+ 
+    const nameTx = new TransactionBuilder(getTempAccount(), { fee: BASE_FEE, networkPassphrase: NETWORK_PASSPHRASE })
+      .addOperation(contract.call('name')).setTimeout(30).build();
+    const nameSim = await server.simulateTransaction(nameTx);
+    let name = symbol;
+    if (rpc.Api.isSimulationSuccess(nameSim) && nameSim.result?.retval) {
+      name = scValToNative(nameSim.result.retval);
+    }
+ 
+    const decimalsTx = new TransactionBuilder(getTempAccount(), { fee: BASE_FEE, networkPassphrase: NETWORK_PASSPHRASE })
+      .addOperation(contract.call('decimals')).setTimeout(30).build();
+    const decimalsSim = await server.simulateTransaction(decimalsTx);
+    let decimals = 7;
+    if (rpc.Api.isSimulationSuccess(decimalsSim) && decimalsSim.result?.retval) {
+      decimals = scValToNative(decimalsSim.result.retval);
+    }
+ 
+    let issuer: string | null = null;
+    try {
+      const adminTx = new TransactionBuilder(getTempAccount(), { fee: BASE_FEE, networkPassphrase: NETWORK_PASSPHRASE })
+        .addOperation(contract.call('admin')).setTimeout(30).build();
+      const adminSim = await server.simulateTransaction(adminTx);
+      if (rpc.Api.isSimulationSuccess(adminSim) && adminSim.result?.retval) {
+        const admin = scValToNative(adminSim.result.retval);
+        if (typeof admin === 'string' && admin.startsWith('G')) issuer = admin;
+      }
+    } catch { /* not a SAC token */ }
+ 
+    return { symbol, name, decimals, issuer };
+  } catch (error) {
+    console.error('Failed to get token info:', error);
+    return null;
+  }
+}
+ 
+export const ensureTrustline = async (
+  publicKey: string,
+  tokenAddress: string,
+  assetCode: string,
+  issuer?: string
+): Promise<boolean> => {
+  if (tokenAddress === getNativeToken()) return true;
+  const isSAC = await isSACToken(tokenAddress);
+  if (!isSAC) return true;
+  const hasTrust = await hasTrustline(publicKey, tokenAddress);
+  if (hasTrust) return true;
+ 
+  let tokenIssuer: string | undefined = issuer;
+  if (!tokenIssuer) {
+    const info = await getTokenInfo(tokenAddress);
+    tokenIssuer = info?.issuer ?? undefined;
+  }
+  if (!tokenIssuer) throw new Error('Could not find token issuer');
+ 
+  await createTrustline(publicKey, assetCode, tokenIssuer);
+  return true;
+};
+ 
+export function deriveSACAddress(assetCode: string, issuer: string): string {
+  try {
+    if (assetCode === 'XLM' && (!issuer || issuer === 'native')) return getNativeToken();
+    const asset = new Asset(assetCode, issuer);
+    return asset.contractId(NETWORK_PASSPHRASE);
+  } catch (error) {
+    console.error('Failed to derive SAC address:', error);
+    return '';
+  }
+}
+ 
+// getLockInfo and getLockCount kept as stubs for any remaining references
+export async function getLockInfo(_vaultAddress: string, _lockId: number): Promise<any> { return null; }
+export async function getLockCount(_vaultAddress: string): Promise<number> { return 0; }

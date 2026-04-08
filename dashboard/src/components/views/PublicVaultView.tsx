@@ -1,5 +1,6 @@
-import React, { useState, useEffect } from 'react';
+﻿import React, { useState, useEffect } from 'react';
 import * as stellar from '../../lib/stellar';
+import CalendarView from './CalendarView';
 
 interface Lock {
   id: number;
@@ -68,7 +69,7 @@ const PublicVaultView: React.FC<PublicVaultViewProps> = ({ vaultAddress, onClose
   const [signers, setSigners] = useState<string[]>([]);
   const [locks, setLocks] = useState<Lock[]>([]);
   const [balances, setBalances] = useState<TokenBalance[]>([]);
-  const [activeTab, setActiveTab] = useState<'overview' | 'locks' | 'assets'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'locks' | 'calendar' | 'assets'>('overview');
   const [copied, setCopied] = useState(false);
 
   useEffect(() => {
@@ -353,7 +354,7 @@ const PublicVaultView: React.FC<PublicVaultViewProps> = ({ vaultAddress, onClose
 
         {/* Tabs */}
         <div className="flex space-x-4 mb-6 border-b border-white/10">
-          {(['overview', 'locks', 'assets'] as const).map((tab) => (
+          {(['overview', 'locks', 'calendar', 'assets'] as const).map((tab) => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
@@ -510,7 +511,14 @@ const PublicVaultView: React.FC<PublicVaultViewProps> = ({ vaultAddress, onClose
           </div>
         )}
 
-        {activeTab === 'assets' && (
+        {activeTab === 'calendar' && (
+            <CalendarView 
+              locks={locks} 
+              vaultBalance={balances}
+            />
+          )}
+
+          {activeTab === 'assets' && (
           <div className="bg-slate-800/50 backdrop-blur-xl rounded-xl border border-white/10 p-6">
             <h3 className="text-lg font-semibold text-white mb-4">Assets</h3>
             {balances.length === 0 ? (

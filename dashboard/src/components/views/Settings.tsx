@@ -2,8 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { CopyIcon } from '../icons';
 import { VaultConfig, Role, SignerWithRole } from '../../types';
 import { truncateAddress } from '../../lib/utils';
-import { getContacts, getContactByAddress, saveContact, Contact } from '../../services/contactsService';
-import { NATIVE_TOKEN } from '../../config';
+import { getContacts, getContactByAddress, Contact } from '../../services/contactsService';
 
 interface SettingsProps {
   vaultAddress: string | null;
@@ -17,7 +16,6 @@ interface SettingsProps {
   onRemoveSigner?: (address: string) => Promise<void>;
   onSetRole?: (address: string, role: Role) => Promise<void>;
   onSetThreshold?: (threshold: number) => Promise<void>;
-  onSetSpendLimit?: (token: string, limit: bigint, period: number) => Promise<void>;
   onLeaveVault?: () => Promise<void>;
 }
 
@@ -33,48 +31,37 @@ export const Settings: React.FC<SettingsProps> = ({
   onRemoveSigner,
   onSetRole,
   onSetThreshold,
-  onSetSpendLimit,
   onLeaveVault,
 }) => {
-  const [activeTab, setActiveTab] = useState<'general' | 'members' | 'limits' | 'advanced'>('general');
+  const [activeTab, setActiveTab] = useState<'general' | 'members' | 'advanced'>('general');
   
-  // Member management state
   const [showAddMemberModal, setShowAddMemberModal] = useState(false);
   const [newMemberAddress, setNewMemberAddress] = useState('');
   const [newMemberRole, setNewMemberRole] = useState<Role>('Executor');
   const [editingMember, setEditingMember] = useState<string | null>(null);
   
-  // Contact selection state for add member
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [contactSearch, setContactSearch] = useState('');
   const [showContactDropdown, setShowContactDropdown] = useState(false);
   const [selectedContact, setSelectedContact] = useState<Contact | null>(null);
   const [inputMode, setInputMode] = useState<'contacts' | 'manual'>('contacts');
   
-  // Threshold state
   const [showThresholdModal, setShowThresholdModal] = useState(false);
   const [newThreshold, setNewThreshold] = useState(vaultConfig?.threshold || 1);
-  
-  // Spend limit state
-  const [showSpendLimitModal, setShowSpendLimitModal] = useState(false);
-  const [spendLimitAmount, setSpendLimitAmount] = useState('');
-  const [spendLimitPeriod, setSpendLimitPeriod] = useState('86400');
   
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
 
-  const isAdmin = userRole === 'Admin';
+  const isAdmin = userRole === 'SuperAdmin' || userRole === 'Admin';
   const isSigner = publicKey && signers.includes(publicKey);
 
-  // Load contacts on mount and when modal opens
   useEffect(() => {
     if (showAddMemberModal) {
       setContacts(getContacts());
     }
   }, [showAddMemberModal]);
 
-  // Filter contacts that are not already signers
   const availableContacts = contacts.filter(
     contact => !signers.includes(contact.address)
   );
@@ -90,16 +77,18 @@ export const Settings: React.FC<SettingsProps> = ({
 
   const getSignerRole = (address: string): Role => {
     const found = signersWithRoles?.find(s => s.address === address);
-    return found?.role || 'Viewer';
+    return found?.role || 'Executor';
   };
 
   const getRoleBadgeStyle = (role: Role) => {
     switch (role) {
+      case 'SuperAdmin':
+        return 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30';
       case 'Admin':
         return 'bg-purple-500/20 text-purple-400 border-purple-500/30';
       case 'Executor':
         return 'bg-blue-500/20 text-blue-400 border-blue-500/30';
-      case 'Viewer':
+      default:
         return 'bg-gray-500/20 text-gray-400 border-gray-500/30';
     }
   };
@@ -156,10 +145,10 @@ export const Settings: React.FC<SettingsProps> = ({
       return;
     }
 
-    const adminCount = signersWithRoles?.filter(s => s.role === 'Admin').length || 0;
-    const isRemovingAdmin = getSignerRole(address) === 'Admin';
-    if (isRemovingAdmin && adminCount <= 1) {
-      setError('Cannot remove the last admin');
+    const superAdminCount = signersWithRoles?.filter(s => s.role === 'SuperAdmin').length || 0;
+    const isRemovingSuperAdmin = getSignerRole(address) === 'SuperAdmin';
+    if (isRemovingSuperAdmin && superAdminCount <= 1) {
+      setError('Cannot remove the last super admin');
       return;
     }
 
@@ -183,10 +172,10 @@ export const Settings: React.FC<SettingsProps> = ({
   const handleRoleChange = async (address: string, role: Role) => {
     if (!onSetRole) return;
 
-    const adminCount = signersWithRoles?.filter(s => s.role === 'Admin').length || 0;
+    const superAdminCount = signersWithRoles?.filter(s => s.role === 'SuperAdmin').length || 0;
     const currentRole = getSignerRole(address);
-    if (currentRole === 'Admin' && role !== 'Admin' && adminCount <= 1) {
-      setError('Cannot change role: vault must have at least one admin');
+    if (currentRole === 'SuperAdmin' && role !== 'SuperAdmin' && superAdminCount <= 1) {
+      setError('Cannot change role: vault must have at least one super admin');
       return;
     }
 
@@ -229,38 +218,19 @@ export const Settings: React.FC<SettingsProps> = ({
     }
   };
 
-  const handleSetSpendLimit = async () => {
-    if (!onSetSpendLimit || !spendLimitAmount) return;
-
-    setLoading(true);
-    setError('');
-    try {
-      const limitInStroops = BigInt(Math.floor(parseFloat(spendLimitAmount) * 10000000));
-      const periodInSeconds = parseInt(spendLimitPeriod);
-      await onSetSpendLimit(NATIVE_TOKEN, limitInStroops, periodInSeconds);
-      setSuccess('Spend limit updated successfully!');
-      setShowSpendLimitModal(false);
-      setSpendLimitAmount('');
-    } catch (err: any) {
-      setError(err.message || 'Failed to set spend limit');
-    } finally {
-      setLoading(false);
-    }
-  };
-
   const handleLeaveVault = async () => {
     if (!onLeaveVault || !publicKey) return;
 
-    const adminCount = signersWithRoles?.filter(s => s.role === 'Admin').length || 0;
+    const superAdminCount = signersWithRoles?.filter(s => s.role === 'SuperAdmin').length || 0;
     const isLastSigner = signers.length === 1;
-    const isLastAdmin = userRole === 'Admin' && adminCount <= 1;
+    const isLastSuperAdmin = userRole === 'SuperAdmin' && superAdminCount <= 1;
 
     let warningMessage = 'Are you sure you want to leave this vault? This action cannot be undone.';
     
     if (isLastSigner) {
-      warningMessage = '⚠️ You are the LAST member of this vault. Leaving will ABANDON the vault permanently. Any remaining funds will be inaccessible. Are you absolutely sure?';
-    } else if (isLastAdmin && signers.length > 1) {
-      setError('You are the last admin. Please assign another admin before leaving, or remove all other members first.');
+      warningMessage = 'WARNING: You are the LAST member of this vault. Leaving will ABANDON the vault permanently. Any remaining funds will be inaccessible. Are you absolutely sure?';
+    } else if (isLastSuperAdmin && signers.length > 1) {
+      setError('You are the last super admin. Please assign another super admin before leaving, or remove all other members first.');
       return;
     } else if ((signers.length - 1) < (vaultConfig?.threshold || 1)) {
       setError(`Cannot leave: would break threshold requirement. Current threshold is ${vaultConfig?.threshold}, but only ${signers.length - 1} members would remain.`);
@@ -303,19 +273,16 @@ export const Settings: React.FC<SettingsProps> = ({
   const tabs = [
     { id: 'general' as const, label: 'General', icon: '⚙️' },
     { id: 'members' as const, label: 'Members & Roles', icon: '👥' },
-    { id: 'limits' as const, label: 'Spend Limits', icon: '📊' },
     { id: 'advanced' as const, label: 'Advanced', icon: '🔧' },
   ];
 
   return (
     <div className="space-y-6">
-      {/* Header */}
       <div>
         <h1 className="text-2xl font-bold">Vault Settings</h1>
-        <p className="text-gray-400 mt-1">Manage your vault configuration, members, and spending limits</p>
+        <p className="text-gray-400 mt-1">Manage your vault configuration and members</p>
       </div>
 
-      {/* Messages */}
       {error && (
         <div className="p-4 rounded-xl bg-red-500/10 border border-red-500/20 text-red-400 flex justify-between">
           <span>{error}</span>
@@ -329,7 +296,6 @@ export const Settings: React.FC<SettingsProps> = ({
         </div>
       )}
 
-      {/* Tabs */}
       <div className="flex gap-2 border-b border-gray-700 pb-2 overflow-x-auto">
         {tabs.map((tab) => (
           <button
@@ -347,10 +313,8 @@ export const Settings: React.FC<SettingsProps> = ({
         ))}
       </div>
 
-      {/* General Tab */}
       {activeTab === 'general' && (
         <div className="space-y-6">
-          {/* Vault Info */}
           <div className="rounded-2xl bg-gradient-to-br from-gray-800/50 to-gray-900/50 border border-gray-700/50 p-6">
             <h3 className="text-lg font-semibold mb-4">Vault Information</h3>
             
@@ -380,15 +344,14 @@ export const Settings: React.FC<SettingsProps> = ({
               <div className="flex items-center justify-between p-4 rounded-xl bg-gray-800/50">
                 <div>
                   <p className="text-sm text-gray-400">Your Role</p>
-                  <span className={`px-3 py-1 rounded-full text-sm font-medium ${getRoleBadgeStyle(userRole || 'Viewer')}`}>
-                    {userRole || 'Viewer'}
+                  <span className={`px-3 py-1 rounded-full text-sm font-medium border ${getRoleBadgeStyle(userRole || 'Executor')}`}>
+                    {userRole || 'Unknown'}
                   </span>
                 </div>
               </div>
             </div>
           </div>
 
-          {/* Quick Stats */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div className="rounded-xl bg-gradient-to-br from-purple-500/10 to-blue-500/10 border border-purple-500/20 p-4">
               <p className="text-sm text-gray-400">Members</p>
@@ -398,13 +361,12 @@ export const Settings: React.FC<SettingsProps> = ({
               <p className="text-sm text-gray-400">Threshold</p>
               <p className="text-2xl font-bold">{vaultConfig?.threshold} / {signers.length}</p>
             </div>
-            <div className="rounded-xl bg-gradient-to-br from-green-500/10 to-emerald-500/10 border border-green-500/20 p-4">
-              <p className="text-sm text-gray-400">Admins</p>
-              <p className="text-2xl font-bold">{signersWithRoles?.filter(s => s.role === 'Admin').length || 0}</p>
+            <div className="rounded-xl bg-gradient-to-br from-yellow-500/10 to-orange-500/10 border border-yellow-500/20 p-4">
+              <p className="text-sm text-gray-400">Super Admins</p>
+              <p className="text-2xl font-bold">{signersWithRoles?.filter(s => s.role === 'SuperAdmin').length || 0}</p>
             </div>
           </div>
 
-          {/* Connected Wallet */}
           <div className="rounded-2xl bg-gradient-to-br from-gray-800/50 to-gray-900/50 border border-gray-700/50 p-6">
             <h3 className="text-lg font-semibold mb-4">Connected Wallet</h3>
             
@@ -431,10 +393,8 @@ export const Settings: React.FC<SettingsProps> = ({
         </div>
       )}
 
-      {/* Members & Roles Tab */}
       {activeTab === 'members' && (
         <div className="space-y-6">
-          {/* Threshold Setting */}
           <div className="rounded-2xl bg-gradient-to-br from-cyan-500/10 to-blue-500/10 border border-cyan-500/20 p-6">
             <div className="flex items-center justify-between">
               <div>
@@ -457,7 +417,6 @@ export const Settings: React.FC<SettingsProps> = ({
             </div>
           </div>
 
-          {/* Members List */}
           <div className="rounded-2xl bg-gradient-to-br from-gray-800/50 to-gray-900/50 border border-gray-700/50">
             <div className="p-6 border-b border-gray-700/50 flex items-center justify-between">
               <div>
@@ -487,9 +446,11 @@ export const Settings: React.FC<SettingsProps> = ({
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-4">
                         <div className={`w-12 h-12 rounded-full flex items-center justify-center font-bold ${
-                          signer === publicKey
-                            ? 'bg-gradient-to-br from-cyan-500 to-blue-600'
-                            : 'bg-gray-700'
+                          role === 'SuperAdmin'
+                            ? 'bg-gradient-to-br from-yellow-500 to-orange-500'
+                            : role === 'Admin'
+                            ? 'bg-gradient-to-br from-purple-500 to-pink-500'
+                            : 'bg-gradient-to-br from-blue-500 to-cyan-500'
                         }`}>
                           {contactName?.charAt(0).toUpperCase() || signer.slice(0, 2)}
                         </div>
@@ -505,7 +466,6 @@ export const Settings: React.FC<SettingsProps> = ({
                               <span className="text-xs text-cyan-400 bg-cyan-500/10 px-2 py-0.5 rounded">You</span>
                             )}
                             
-                            {/* Role Badge / Dropdown */}
                             {editingMember === signer && isAdmin && onSetRole ? (
                               <select
                                 value={role}
@@ -515,9 +475,9 @@ export const Settings: React.FC<SettingsProps> = ({
                                 autoFocus
                                 disabled={loading}
                               >
+                                <option value="SuperAdmin">SuperAdmin</option>
                                 <option value="Admin">Admin</option>
                                 <option value="Executor">Executor</option>
-                                <option value="Viewer">Viewer</option>
                               </select>
                             ) : (
                               <button
@@ -563,20 +523,30 @@ export const Settings: React.FC<SettingsProps> = ({
             </div>
           </div>
 
-          {/* Role Permissions Info */}
           <div className="rounded-2xl bg-gradient-to-br from-gray-800/50 to-gray-900/50 border border-gray-700/50 p-6">
             <h3 className="text-lg font-semibold mb-4">Role Permissions</h3>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="p-4 rounded-xl bg-yellow-500/10 border border-yellow-500/20">
+                <div className="flex items-center gap-2 mb-2">
+                  <span className="px-2 py-0.5 rounded bg-yellow-500/20 text-yellow-400 text-sm font-medium">SuperAdmin</span>
+                </div>
+                <ul className="text-sm text-gray-400 space-y-1">
+                  <li>• Full vault control</li>
+                  <li>• Manage all members & roles</li>
+                  <li>• Change threshold</li>
+                  <li>• Create & execute transactions</li>
+                </ul>
+              </div>
+              
               <div className="p-4 rounded-xl bg-purple-500/10 border border-purple-500/20">
                 <div className="flex items-center gap-2 mb-2">
                   <span className="px-2 py-0.5 rounded bg-purple-500/20 text-purple-400 text-sm font-medium">Admin</span>
                 </div>
                 <ul className="text-sm text-gray-400 space-y-1">
-                  <li>• Manage members & roles</li>
+                  <li>• Manage executors</li>
                   <li>• Change threshold</li>
-                  <li>• Set spend limits</li>
                   <li>• Create & approve transactions</li>
-                  <li>• Execute transactions</li>
+                  <li>• Manage locks</li>
                 </ul>
               </div>
               
@@ -585,24 +555,10 @@ export const Settings: React.FC<SettingsProps> = ({
                   <span className="px-2 py-0.5 rounded bg-blue-500/20 text-blue-400 text-sm font-medium">Executor</span>
                 </div>
                 <ul className="text-sm text-gray-400 space-y-1">
-                  <li>• Create & approve transactions</li>
-                  <li>• Execute transactions</li>
+                  <li>• Create transactions</li>
+                  <li>• Approve transactions</li>
+                  <li>• Execute approved txns</li>
                   <li>• View all activity</li>
-                  <li className="text-gray-600">• Cannot manage members</li>
-                  <li className="text-gray-600">• Cannot change settings</li>
-                </ul>
-              </div>
-              
-              <div className="p-4 rounded-xl bg-gray-500/10 border border-gray-500/20">
-                <div className="flex items-center gap-2 mb-2">
-                  <span className="px-2 py-0.5 rounded bg-gray-500/20 text-gray-400 text-sm font-medium">Viewer</span>
-                </div>
-                <ul className="text-sm text-gray-400 space-y-1">
-                  <li>• View all activity</li>
-                  <li>• View balances & history</li>
-                  <li className="text-gray-600">• Cannot create transactions</li>
-                  <li className="text-gray-600">• Cannot approve/execute</li>
-                  <li className="text-gray-600">• Cannot manage anything</li>
                 </ul>
               </div>
             </div>
@@ -616,85 +572,8 @@ export const Settings: React.FC<SettingsProps> = ({
         </div>
       )}
 
-      {/* Spend Limits Tab */}
-      {activeTab === 'limits' && (
-        <div className="space-y-6">
-          <div className="rounded-2xl bg-gradient-to-br from-gray-800/50 to-gray-900/50 border border-gray-700/50 p-6">
-            <div className="flex items-center justify-between mb-4">
-              <div>
-                <h3 className="text-lg font-semibold">Daily Spend Limits</h3>
-                <p className="text-gray-400 text-sm mt-1">
-                  Allow transactions below a certain amount to be executed with fewer approvals
-                </p>
-              </div>
-              {isAdmin && onSetSpendLimit && (
-                <button
-                  onClick={() => setShowSpendLimitModal(true)}
-                  className="px-4 py-2 rounded-xl bg-gradient-to-r from-purple-500 to-blue-500 hover:from-purple-600 hover:to-blue-600 text-white font-medium transition"
-                >
-                  Set Limit
-                </button>
-              )}
-            </div>
-            
-            <div className="space-y-4">
-              <div className="p-4 rounded-xl bg-gray-800/50">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-4">
-                    <div className="w-12 h-12 rounded-full bg-gradient-to-br from-yellow-500 to-orange-500 flex items-center justify-center text-xl">
-                      ⭐
-                    </div>
-                    <div>
-                      <p className="font-semibold">XLM (Native)</p>
-                      <p className="text-sm text-gray-400">Stellar Lumens</p>
-                    </div>
-                  </div>
-                  <div className="text-right">
-                    <p className="text-xl font-bold">Not Set</p>
-                    <span className="text-xs px-2 py-0.5 rounded bg-gray-500/20 text-gray-400">
-                      Disabled
-                    </span>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* How Spend Limits Work */}
-          <div className="rounded-2xl bg-gradient-to-br from-cyan-500/10 to-blue-500/10 border border-cyan-500/20 p-6">
-            <h3 className="text-lg font-semibold mb-4">How Spend Limits Work</h3>
-            <div className="space-y-4 text-sm text-gray-400">
-              <div className="flex items-start gap-3">
-                <span className="w-6 h-6 rounded-full bg-cyan-500/20 text-cyan-400 flex items-center justify-center text-xs font-bold flex-shrink-0">1</span>
-                <p>Set a maximum amount that can be spent within a time period (e.g., 100 XLM per day)</p>
-              </div>
-              <div className="flex items-start gap-3">
-                <span className="w-6 h-6 rounded-full bg-cyan-500/20 text-cyan-400 flex items-center justify-center text-xs font-bold flex-shrink-0">2</span>
-                <p>Transactions within this limit can be executed with only 1 signature</p>
-              </div>
-              <div className="flex items-start gap-3">
-                <span className="w-6 h-6 rounded-full bg-cyan-500/20 text-cyan-400 flex items-center justify-center text-xs font-bold flex-shrink-0">3</span>
-                <p>Transactions exceeding the limit require the full approval threshold</p>
-              </div>
-              <div className="flex items-start gap-3">
-                <span className="w-6 h-6 rounded-full bg-cyan-500/20 text-cyan-400 flex items-center justify-center text-xs font-bold flex-shrink-0">4</span>
-                <p>The limit resets after the specified time period</p>
-              </div>
-            </div>
-          </div>
-
-          {!isAdmin && (
-            <div className="p-4 rounded-xl bg-yellow-500/10 border border-yellow-500/20 text-yellow-400">
-              Only vault admins can configure spend limits.
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Advanced Tab */}
       {activeTab === 'advanced' && (
         <div className="space-y-6">
-          {/* Contract Info */}
           <div className="rounded-2xl bg-gradient-to-br from-gray-800/50 to-gray-900/50 border border-gray-700/50 p-6">
             <h3 className="text-lg font-semibold mb-4">Contract Details</h3>
             
@@ -710,14 +589,9 @@ export const Settings: React.FC<SettingsProps> = ({
                   Testnet
                 </span>
               </div>
-              <div className="flex justify-between items-center p-3 rounded-lg bg-gray-800/50">
-                <span className="text-gray-400">Transaction Fee</span>
-                <span>{vaultConfig?.tx_fee_amount ? (Number(vaultConfig.tx_fee_amount) / 10000000).toFixed(2) : '0.10'} XLM</span>
-              </div>
             </div>
           </div>
 
-          {/* Actions */}
           <div className="rounded-2xl bg-gradient-to-br from-gray-800/50 to-gray-900/50 border border-gray-700/50 p-6">
             <h3 className="text-lg font-semibold mb-4">Actions</h3>
             
@@ -768,7 +642,6 @@ export const Settings: React.FC<SettingsProps> = ({
             </div>
           </div>
 
-          {/* Danger Zone - Available to ALL signers */}
           {isSigner && onLeaveVault && (
             <div className="rounded-2xl bg-gradient-to-br from-red-500/10 to-orange-500/10 border border-red-500/20 p-6">
               <h3 className="text-lg font-semibold text-red-400 mb-4">⚠️ Danger Zone</h3>
@@ -782,11 +655,6 @@ export const Settings: React.FC<SettingsProps> = ({
                       {signers.length === 1 && (
                         <span className="block text-red-400 mt-1">
                           ⚠️ You are the last member - leaving will abandon the vault!
-                        </span>
-                      )}
-                      {signers.length > 1 && (
-                        <span className="block text-yellow-400 mt-1">
-                          A fee of 0.1 XLM will be charged.
                         </span>
                       )}
                     </p>
@@ -805,7 +673,6 @@ export const Settings: React.FC<SettingsProps> = ({
         </div>
       )}
 
-      {/* Add Member Modal with Contact Selection */}
       {showAddMemberModal && (
         <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
           <div className="bg-[#12131a] rounded-2xl border border-gray-700 w-full max-w-md max-h-[90vh] overflow-hidden flex flex-col">
@@ -815,7 +682,6 @@ export const Settings: React.FC<SettingsProps> = ({
             </div>
             
             <div className="p-6 space-y-4 overflow-y-auto flex-1">
-              {/* Tab Selection */}
               <div className="flex gap-2 p-1 bg-gray-800 rounded-xl">
                 <button
                   onClick={() => {
@@ -847,11 +713,9 @@ export const Settings: React.FC<SettingsProps> = ({
                 </button>
               </div>
 
-              {/* Contact Selection Mode */}
               {inputMode === 'contacts' && (
                 <div className="space-y-4">
                   {selectedContact ? (
-                    // Show selected contact
                     <div className="p-4 rounded-xl bg-purple-500/10 border border-purple-500/30">
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-3">
@@ -874,7 +738,6 @@ export const Settings: React.FC<SettingsProps> = ({
                       </div>
                     </div>
                   ) : (
-                    // Contact search
                     <div className="relative">
                       <input
                         type="text"
@@ -896,7 +759,6 @@ export const Settings: React.FC<SettingsProps> = ({
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
                       </svg>
 
-                      {/* Contact Dropdown */}
                       {showContactDropdown && (
                         <div className="absolute top-full left-0 right-0 mt-2 bg-gray-800 border border-gray-700 rounded-xl shadow-xl z-10 max-h-48 overflow-y-auto">
                           {filteredContacts.length > 0 ? (
@@ -935,7 +797,6 @@ export const Settings: React.FC<SettingsProps> = ({
                 </div>
               )}
 
-              {/* Manual Address Mode */}
               {inputMode === 'manual' && (
                 <div>
                   <label className="block text-sm text-gray-400 mb-2">Stellar Address</label>
@@ -949,7 +810,6 @@ export const Settings: React.FC<SettingsProps> = ({
                 </div>
               )}
 
-              {/* Role Selection */}
               <div>
                 <label className="block text-sm text-gray-400 mb-2">Role</label>
                 <select
@@ -957,15 +817,10 @@ export const Settings: React.FC<SettingsProps> = ({
                   onChange={(e) => setNewMemberRole(e.target.value as Role)}
                   className="w-full p-3 rounded-xl bg-gray-800 border border-gray-700 focus:border-purple-500 focus:outline-none"
                 >
-                  <option value="Admin">Admin - Full control</option>
+                  <option value="SuperAdmin">SuperAdmin - Full control</option>
+                  <option value="Admin">Admin - Manage members</option>
                   <option value="Executor">Executor - Can transact</option>
-                  <option value="Viewer">Viewer - Read only</option>
                 </select>
-              </div>
-
-              {/* Fee Notice */}
-              <div className="p-3 rounded-xl bg-blue-500/10 border border-blue-500/20 text-blue-400 text-sm">
-                A fee of 0.1 XLM will be charged for adding a member.
               </div>
 
               {error && <p className="text-red-400 text-sm">{error}</p>}
@@ -990,7 +845,6 @@ export const Settings: React.FC<SettingsProps> = ({
         </div>
       )}
 
-      {/* Change Threshold Modal */}
       {showThresholdModal && (
         <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
           <div className="bg-[#12131a] rounded-2xl border border-gray-700 w-full max-w-md">
@@ -1022,10 +876,6 @@ export const Settings: React.FC<SettingsProps> = ({
                   ⚠️ Changing the threshold affects security. A higher threshold requires more signatures but may slow operations.
                 </p>
               </div>
-
-              <div className="p-3 rounded-xl bg-blue-500/10 border border-blue-500/20 text-blue-400 text-sm">
-                A fee of 0.1 XLM will be charged for this action.
-              </div>
             </div>
             
             <div className="p-6 border-t border-gray-700 flex gap-3">
@@ -1041,73 +891,6 @@ export const Settings: React.FC<SettingsProps> = ({
                 className="flex-1 px-4 py-3 rounded-xl bg-gradient-to-r from-purple-500 to-blue-500 hover:from-purple-600 hover:to-blue-600 disabled:opacity-50 transition font-medium"
               >
                 {loading ? 'Updating...' : 'Update'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Set Spend Limit Modal */}
-      {showSpendLimitModal && (
-        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
-          <div className="bg-[#12131a] rounded-2xl border border-gray-700 w-full max-w-md">
-            <div className="p-6 border-b border-gray-700">
-              <h3 className="text-xl font-bold">Set Daily Spend Limit</h3>
-            </div>
-            
-            <div className="p-6 space-y-4">
-              <div>
-                <label className="block text-sm text-gray-400 mb-2">Amount (XLM)</label>
-                <input
-                  type="number"
-                  step="1"
-                  min="0"
-                  value={spendLimitAmount}
-                  onChange={(e) => setSpendLimitAmount(e.target.value)}
-                  placeholder="100"
-                  className="w-full p-3 rounded-xl bg-gray-800 border border-gray-700 focus:border-purple-500 focus:outline-none"
-                />
-              </div>
-              
-              <div>
-                <label className="block text-sm text-gray-400 mb-2">Reset Period</label>
-                <select
-                  value={spendLimitPeriod}
-                  onChange={(e) => setSpendLimitPeriod(e.target.value)}
-                  className="w-full p-3 rounded-xl bg-gray-800 border border-gray-700 focus:border-purple-500 focus:outline-none"
-                >
-                  <option value="3600">1 Hour</option>
-                  <option value="86400">1 Day</option>
-                  <option value="604800">1 Week</option>
-                  <option value="2592000">1 Month</option>
-                </select>
-              </div>
-
-              <div className="p-4 rounded-xl bg-blue-500/10 border border-blue-500/20 text-sm text-gray-400">
-                Transactions up to {spendLimitAmount || '0'} XLM can be executed with a single signature. Larger amounts require full threshold approval.
-              </div>
-
-              <div className="p-3 rounded-xl bg-blue-500/10 border border-blue-500/20 text-blue-400 text-sm">
-                A fee of 0.1 XLM will be charged for this action.
-              </div>
-            </div>
-            
-            <div className="p-6 border-t border-gray-700 flex gap-3">
-              <button
-                onClick={() => {
-                  setShowSpendLimitModal(false);
-                  setSpendLimitAmount('');
-                }}
-                className="flex-1 px-4 py-3 rounded-xl bg-gray-700 hover:bg-gray-600 transition"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleSetSpendLimit}
-                disabled={loading || !spendLimitAmount}
-                className="flex-1 px-4 py-3 rounded-xl bg-gradient-to-r from-purple-500 to-blue-500 hover:from-purple-600 hover:to-blue-600 disabled:opacity-50 transition font-medium"
-              >
-                {loading ? 'Setting...' : 'Set Limit'}
               </button>
             </div>
           </div>

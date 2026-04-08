@@ -1,4 +1,4 @@
-import { NETWORK_PASSPHRASE } from '../config';
+﻿import { NETWORK_PASSPHRASE } from '../config';
 
 const HORIZON_URL = NETWORK_PASSPHRASE.includes('Test') 
   ? 'https://horizon-testnet.stellar.org'
@@ -30,11 +30,22 @@ export interface TransactionRecord {
   successful: boolean;
 }
 
+// Check if address is a contract (starts with C) vs account (starts with G)
+const isContractAddress = (address: string): boolean => {
+  return address.startsWith('C');
+};
+
 // Get payments for an account (includes incoming and outgoing)
 export async function getAccountPayments(
   accountId: string,
   limit: number = 50
 ): Promise<PaymentRecord[]> {
+  // Horizon classic API doesn't support contract addresses
+  if (isContractAddress(accountId)) {
+    console.log('Skipping Horizon payment query for contract address:', accountId);
+    return [];
+  }
+
   try {
     const response = await fetch(
       `${HORIZON_URL}/accounts/${accountId}/payments?order=desc&limit=${limit}`
@@ -78,6 +89,12 @@ export async function getAccountTransactions(
   accountId: string,
   limit: number = 50
 ): Promise<TransactionRecord[]> {
+  // Horizon classic API doesn't support contract addresses
+  if (isContractAddress(accountId)) {
+    console.log('Skipping Horizon transaction query for contract address:', accountId);
+    return [];
+  }
+
   try {
     const response = await fetch(
       `${HORIZON_URL}/accounts/${accountId}/transactions?order=desc&limit=${limit}`
@@ -114,6 +131,12 @@ export async function getAccountOperations(
   accountId: string,
   limit: number = 50
 ): Promise<any[]> {
+  // Horizon classic API doesn't support contract addresses
+  if (isContractAddress(accountId)) {
+    console.log('Skipping Horizon operations query for contract address:', accountId);
+    return [];
+  }
+
   try {
     const response = await fetch(
       `${HORIZON_URL}/accounts/${accountId}/operations?order=desc&limit=${limit}`

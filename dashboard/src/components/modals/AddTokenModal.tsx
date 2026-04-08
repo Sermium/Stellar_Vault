@@ -1,545 +1,288 @@
-import React, { useState, useEffect } from 'react';
-import { isSACToken, getTokenIssuer, deriveSACAddress } from '../../lib/stellar';
-import { 
-  CustomToken, 
-  saveCustomToken, 
-  getCustomTokens, 
-} from '../../services/tokensService';
-import { 
-  searchAssetsTestnet, 
-  getPopularAssets, 
-  AssetSearchResult 
-} from '../../services/assetSearchService';
+﻿import React, { useState, useEffect } from 'react';
+import * as StellarSdk from '@stellar/stellar-sdk';
+import { SOROBAN_RPC_URL, NETWORK_PASSPHRASE } from '../../config';
 
 interface AddTokenModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onSuccess: (token: CustomToken) => void;
+  onAddToken: (token: { address: string; symbol: string; name: string; decimals: number }) => void;
 }
 
-// Copy icon component
-const CopyIcon = () => (
-  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
-  </svg>
-);
+interface TokenInfo {
+  symbol: string;
+  name: string;
+  decimals: number;
+}
 
-// Check icon component
-const CheckIcon = () => (
-  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-  </svg>
-);
-
-export const AddTokenModal: React.FC<AddTokenModalProps> = ({
-  isOpen,
-  onClose,
-  onSuccess,
-}) => {
-  const [searchQuery, setSearchQuery] = useState('');
-  const [searchResults, setSearchResults] = useState<AssetSearchResult[]>([]);
-  const [popularAssets, setPopularAssets] = useState<AssetSearchResult[]>([]);
+export const AddTokenModal: React.FC<AddTokenModalProps> = ({ isOpen, onClose, onAddToken }) => {
+  const [address, setAddress] = useState('');
+  const [tokenInfo, setTokenInfo] = useState<TokenInfo | null>(null);
   const [loading, setLoading] = useState(false);
-  const [searching, setSearching] = useState(false);
   const [error, setError] = useState('');
-  const [selectedAsset, setSelectedAsset] = useState<AssetSearchResult | null>(null);
   const [manualMode, setManualMode] = useState(false);
-  const [copiedField, setCopiedField] = useState<string | null>(null);
   
-  // Manual entry fields
-  const [manualAddress, setManualAddress] = useState('');
   const [manualSymbol, setManualSymbol] = useState('');
   const [manualName, setManualName] = useState('');
-  const [manualDecimals, setManualDecimals] = useState('7');
+  const [manualDecimals, setManualDecimals] = useState(7);
 
-  // Copy to clipboard function
-  const copyToClipboard = async (text: string, field: string) => {
-    try {
-      await navigator.clipboard.writeText(text);
-      setCopiedField(field);
-      setTimeout(() => setCopiedField(null), 2000);
-    } catch (err) {
-      console.error('Failed to copy:', err);
-    }
-  };
-
-  // Load popular assets on mount
   useEffect(() => {
-    if (isOpen && popularAssets.length === 0) {
-      loadPopularAssets();
+    if (address.length === 56 && address.startsWith('C')) {
+      fetchTokenInfo(address);
+    } else {
+      setTokenInfo(null);
+      setError('');
     }
-  }, [isOpen]);
+  }, [address]);
 
-  // Search with debounce
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      if (searchQuery.length >= 2) {
-        handleSearch();
-      } else {
-        setSearchResults([]);
-      }
-    }, 300);
-
-    return () => clearTimeout(timer);
-  }, [searchQuery]);
-
-  const loadPopularAssets = async () => {
-    try {
-      const assets = await getPopularAssets('testnet');
-      setPopularAssets(assets.slice(0, 10));
-    } catch (err) {
-      console.error('Failed to load popular assets:', err);
-    }
-  };
-
-  const handleSearch = async () => {
-    if (!searchQuery.trim()) return;
-    
-    setSearching(true);
-    try {
-      const results = await searchAssetsTestnet(searchQuery);
-      setSearchResults(results);
-    } catch (err) {
-      console.error('Search failed:', err);
-    } finally {
-      setSearching(false);
-    }
-  };
-
-  const resetForm = () => {
-    setSearchQuery('');
-    setSearchResults([]);
+  const fetchTokenInfo = async (contractAddress: string) => {
+    setLoading(true);
     setError('');
-    setSelectedAsset(null);
+    setTokenInfo(null);
     setManualMode(false);
-    setManualAddress('');
+
+    try {
+      const server = new StellarSdk.rpc.Server(SOROBAN_RPC_URL);
+      const contract = new StellarSdk.Contract(contractAddress);
+      
+      const tempKeypair = StellarSdk.Keypair.random();
+      const tempAccount = new StellarSdk.Account(tempKeypair.publicKey(), '0');
+
+      // Fetch symbol
+      const symbolTx = new StellarSdk.TransactionBuilder(tempAccount, {
+        fee: '100',
+        networkPassphrase: NETWORK_PASSPHRASE,
+      })
+        .addOperation(contract.call('symbol'))
+        .setTimeout(30)
+        .build();
+
+      const symbolResult = await server.simulateTransaction(symbolTx);
+
+      // Fetch name
+      const nameTx = new StellarSdk.TransactionBuilder(tempAccount, {
+        fee: '100',
+        networkPassphrase: NETWORK_PASSPHRASE,
+      })
+        .addOperation(contract.call('name'))
+        .setTimeout(30)
+        .build();
+
+      const nameResult = await server.simulateTransaction(nameTx);
+
+      // Fetch decimals
+      const decimalsTx = new StellarSdk.TransactionBuilder(tempAccount, {
+        fee: '100',
+        networkPassphrase: NETWORK_PASSPHRASE,
+      })
+        .addOperation(contract.call('decimals'))
+        .setTimeout(30)
+        .build();
+
+      const decimalsResult = await server.simulateTransaction(decimalsTx);
+
+      // Parse results
+      let symbol = 'UNKNOWN';
+      let name = 'Unknown Token';
+      let decimals = 7;
+
+      if (StellarSdk.rpc.Api.isSimulationSuccess(symbolResult) && symbolResult.result?.retval) {
+        const val = StellarSdk.scValToNative(symbolResult.result.retval);
+        symbol = typeof val === 'string' ? val : String(val);
+      }
+
+      if (StellarSdk.rpc.Api.isSimulationSuccess(nameResult) && nameResult.result?.retval) {
+        const val = StellarSdk.scValToNative(nameResult.result.retval);
+        name = typeof val === 'string' ? val : String(val);
+      }
+
+      if (StellarSdk.rpc.Api.isSimulationSuccess(decimalsResult) && decimalsResult.result?.retval) {
+        const val = StellarSdk.scValToNative(decimalsResult.result.retval);
+        decimals = typeof val === 'number' ? val : Number(val);
+      }
+
+      setTokenInfo({ symbol, name, decimals });
+    } catch (err: any) {
+      console.error('Error fetching token info:', err);
+      setError('Could not auto-detect token info. Enter manually.');
+      setManualMode(true);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleSubmit = () => {
+    if (!address || address.length !== 56) {
+      setError('Please enter a valid 56-character contract address');
+      return;
+    }
+
+    if (manualMode) {
+      if (!manualSymbol) {
+        setError('Please enter a symbol');
+        return;
+      }
+      onAddToken({
+        address,
+        symbol: manualSymbol.toUpperCase(),
+        name: manualName || manualSymbol,
+        decimals: manualDecimals,
+      });
+    } else if (tokenInfo) {
+      onAddToken({
+        address,
+        symbol: tokenInfo.symbol,
+        name: tokenInfo.name,
+        decimals: tokenInfo.decimals,
+      });
+    } else {
+      setError('Please wait for token info to load or enter manually');
+      return;
+    }
+
+    setAddress('');
+    setTokenInfo(null);
     setManualSymbol('');
     setManualName('');
-    setManualDecimals('7');
-    setCopiedField(null);
-  };
-
-  const handleClose = () => {
-    resetForm();
+    setManualDecimals(7);
     onClose();
-  };
-
-  const handleSelectAsset = async (asset: AssetSearchResult) => {
-    setLoading(true);
-    setError('');
-
-    try {
-      const contractAddress = deriveSACAddress(asset.code, asset.issuer);
-      
-      if (!contractAddress) {
-        setManualMode(true);
-        setManualSymbol(asset.code);
-        setManualName(asset.name);
-        setManualDecimals('7');
-        setError(`Could not derive contract address for ${asset.code}`);
-        setLoading(false);
-        return;
-      }
-
-      const existing = getCustomTokens().find(t => t.address === contractAddress);
-      if (existing) {
-        setError('This token is already in your list');
-        setLoading(false);
-        return;
-      }
-
-      setSelectedAsset({ ...asset, address: contractAddress });
-    } catch (err) {
-      console.error('Failed to select asset:', err);
-      setManualMode(true);
-      setManualSymbol(asset.code);
-      setManualName(asset.name);
-      setError('Failed to derive address. Please enter manually.');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleAddSelectedAsset = () => {
-    if (!selectedAsset || !selectedAsset.address) return;
-
-    const token: CustomToken = {
-      address: selectedAsset.address,
-      symbol: selectedAsset.code,
-      name: selectedAsset.name,
-      decimals: selectedAsset.decimals,
-      icon: selectedAsset.icon,
-      isSAC: true,
-      issuer: selectedAsset.issuer,
-      addedAt: Date.now(),
-    };
-
-    saveCustomToken(token);
-    onSuccess(token);
-    handleClose();
-  };
-
-  const handleManualAdd = async () => {
-    if (!manualAddress.trim() || !manualSymbol.trim()) {
-      setError('Address and symbol are required');
-      return;
-    }
-
-    if (!manualAddress.startsWith('C') || manualAddress.length !== 56) {
-      setError('Invalid contract address (must start with C and be 56 characters)');
-      return;
-    }
-
-    const existing = getCustomTokens().find(t => t.address === manualAddress.trim());
-    if (existing) {
-      setError('This token is already in your list');
-      return;
-    }
-
-    setLoading(true);
-    setError('');
-
-    try {
-      const isSAC = await isSACToken(manualAddress.trim());
-      let issuer: string | undefined;
-      
-      if (isSAC) {
-        issuer = await getTokenIssuer(manualAddress.trim()) ?? undefined;
-      }
-
-      const token: CustomToken = {
-        address: manualAddress.trim(),
-        symbol: manualSymbol.trim().toUpperCase(),
-        name: manualName.trim() || manualSymbol.trim().toUpperCase(),
-        decimals: parseInt(manualDecimals) || 7,
-        isSAC,
-        issuer,
-        addedAt: Date.now(),
-      };
-
-      saveCustomToken(token);
-      onSuccess(token);
-      handleClose();
-    } catch (err) {
-      console.error('Failed to add token:', err);
-      setError('Failed to add token');
-    } finally {
-      setLoading(false);
-    }
   };
 
   if (!isOpen) return null;
 
-  const displayAssets = searchQuery.length >= 2 ? searchResults : popularAssets;
-
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-      <div className="bg-slate-800 rounded-xl max-w-lg w-full max-h-[80vh] flex flex-col">
-        {/* Header */}
-        <div className="flex items-center justify-between p-6 border-b border-slate-700">
-          <h2 className="text-xl font-semibold text-white">Add Token</h2>
-          <button
-            onClick={handleClose}
-            className="text-slate-400 hover:text-white transition-colors"
-          >
-            <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-            </svg>
-          </button>
+    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
+      <div className="bg-[#12131a] rounded-2xl border border-gray-700 w-full max-w-md">
+        <div className="p-6 border-b border-gray-700">
+          <h3 className="text-xl font-bold">Add Custom Token</h3>
+          <p className="text-gray-400 text-sm mt-1">Enter the contract address to auto-detect token info</p>
         </div>
 
-        {!manualMode && !selectedAsset ? (
-          <>
-            {/* Search Input */}
-            <div className="p-4 border-b border-slate-700">
-              <div className="relative">
-                <input
-                  type="text"
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  placeholder="Search by name, symbol, or issuer..."
-                  className="w-full px-4 py-3 pl-10 bg-slate-700 border border-slate-600 rounded-lg text-white placeholder-slate-500 focus:outline-none focus:border-purple-500"
-                />
-                <svg
-                  className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-500"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
-                >
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+        <div className="p-6 space-y-4">
+          <div>
+            <label className="block text-sm text-gray-400 mb-2">Contract Address</label>
+            <input
+              type="text"
+              value={address}
+              onChange={(e) => setAddress(e.target.value.trim())}
+              placeholder="CXXXX...XXXX"
+              className="w-full p-3 rounded-xl bg-gray-800 border border-gray-700 focus:border-purple-500 focus:outline-none font-mono text-sm"
+            />
+          </div>
+
+          {loading && (
+            <div className="flex items-center gap-3 p-4 rounded-xl bg-blue-500/10 border border-blue-500/20">
+              <div className="animate-spin w-5 h-5 border-2 border-blue-400 border-t-transparent rounded-full"></div>
+              <span className="text-blue-400">Detecting token info...</span>
+            </div>
+          )}
+
+          {tokenInfo && !loading && (
+            <div className="p-4 rounded-xl bg-green-500/10 border border-green-500/20">
+              <div className="flex items-center gap-2 mb-3">
+                <svg className="w-5 h-5 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
                 </svg>
-                {searching && (
-                  <div className="absolute right-3 top-1/2 -translate-y-1/2">
-                    <div className="w-5 h-5 border-2 border-purple-500 border-t-transparent rounded-full animate-spin" />
-                  </div>
-                )}
+                <span className="text-green-400 font-medium">Token Detected!</span>
               </div>
-            </div>
-
-            {/* Asset List */}
-            <div className="flex-1 overflow-y-auto p-4">
-              <p className="text-sm text-slate-400 mb-3">
-                {searchQuery.length >= 2 
-                  ? `${searchResults.length} results found` 
-                  : 'Popular tokens'}
-              </p>
-
-              {displayAssets.length === 0 ? (
-                <div className="text-center py-8">
-                  <p className="text-slate-400">
-                    {searchQuery.length >= 2 
-                      ? 'No tokens found. Try manual entry.' 
-                      : 'Loading popular tokens...'}
-                  </p>
-                </div>
-              ) : (
-                <div className="space-y-2">
-                  {displayAssets.map((asset, index) => (
-                    <button
-                      key={`${asset.code}-${asset.issuer}-${index}`}
-                      onClick={() => handleSelectAsset(asset)}
-                      disabled={loading}
-                      className="w-full flex items-center gap-3 p-3 bg-slate-700/50 hover:bg-slate-700 rounded-lg transition-colors text-left"
-                    >
-                      <div className="w-10 h-10 bg-slate-600 rounded-full flex items-center justify-center overflow-hidden">
-                        {asset.icon ? (
-                          <img src={asset.icon} alt={asset.code} className="w-full h-full object-cover" />
-                        ) : (
-                          <span className="text-white font-medium text-sm">
-                            {asset.code.slice(0, 2)}
-                          </span>
-                        )}
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2">
-                          <span className="text-white font-medium">{asset.code}</span>
-                          {asset.rating && asset.rating >= 7 && (
-                            <span className="px-1.5 py-0.5 bg-green-500/20 text-green-400 text-xs rounded">
-                              Verified
-                            </span>
-                          )}
-                        </div>
-                        <p className="text-slate-400 text-sm truncate">{asset.name}</p>
-                        {asset.domain && (
-                          <p className="text-slate-500 text-xs">{asset.domain}</p>
-                        )}
-                      </div>
-                      {asset.trustlines && (
-                        <span className="text-slate-500 text-xs">
-                          {asset.trustlines.toLocaleString()} trustlines
-                        </span>
-                      )}
-                    </button>
-                  ))}
-                </div>
-              )}
-
-              {error && (
-                <p className="text-red-400 text-sm mt-3">{error}</p>
-              )}
-            </div>
-
-            {/* Footer */}
-            <div className="p-4 border-t border-slate-700">
-              <button
-                onClick={() => setManualMode(true)}
-                className="w-full py-3 bg-slate-700 hover:bg-slate-600 text-white rounded-lg font-medium transition-colors"
-              >
-                Enter Contract Address Manually
-              </button>
-            </div>
-          </>
-        ) : selectedAsset ? (
-          <>
-            {/* Confirmation View */}
-            <div className="p-6 space-y-4">
-              <div className="flex items-center gap-4">
-                <div className="w-16 h-16 bg-slate-700 rounded-full flex items-center justify-center overflow-hidden">
-                  {selectedAsset.icon ? (
-                    <img src={selectedAsset.icon} alt={selectedAsset.code} className="w-full h-full object-cover" />
-                  ) : (
-                    <span className="text-white font-bold text-xl">
-                      {selectedAsset.code.slice(0, 2)}
-                    </span>
-                  )}
+              <div className="grid grid-cols-3 gap-4 text-center">
+                <div>
+                  <p className="text-xs text-gray-500 mb-1">Symbol</p>
+                  <p className="font-bold text-lg">{tokenInfo.symbol}</p>
                 </div>
                 <div>
-                  <h3 className="text-xl font-bold text-white">{selectedAsset.code}</h3>
-                  <p className="text-slate-400">{selectedAsset.name}</p>
+                  <p className="text-xs text-gray-500 mb-1">Name</p>
+                  <p className="font-medium text-sm truncate">{tokenInfo.name}</p>
                 </div>
-              </div>
-
-              <div className="bg-slate-700/50 rounded-lg p-4 space-y-3 text-sm">
-                {/* Contract Address */}
-                <div className="flex items-center justify-between gap-2">
-                  <span className="text-slate-400 shrink-0">Contract</span>
-                  <div className="flex items-center gap-2 min-w-0">
-                    <span className="text-white font-mono text-xs truncate">
-                      {selectedAsset.address}
-                    </span>
-                    <button
-                      onClick={() => copyToClipboard(selectedAsset.address, 'contract')}
-                      className="p-1.5 hover:bg-slate-600 rounded transition-colors shrink-0"
-                      title="Copy contract address"
-                    >
-                      {copiedField === 'contract' ? (
-                        <CheckIcon />
-                      ) : (
-                        <CopyIcon />
-                      )}
-                    </button>
-                  </div>
+                <div>
+                  <p className="text-xs text-gray-500 mb-1">Decimals</p>
+                  <p className="font-bold text-lg">{tokenInfo.decimals}</p>
                 </div>
-
-                {/* Issuer */}
-                <div className="flex items-center justify-between gap-2">
-                  <span className="text-slate-400 shrink-0">Issuer</span>
-                  <div className="flex items-center gap-2 min-w-0">
-                    <span className="text-white font-mono text-xs truncate">
-                      {selectedAsset.issuer}
-                    </span>
-                    <button
-                      onClick={() => copyToClipboard(selectedAsset.issuer, 'issuer')}
-                      className="p-1.5 hover:bg-slate-600 rounded transition-colors shrink-0"
-                      title="Copy issuer address"
-                    >
-                      {copiedField === 'issuer' ? (
-                        <CheckIcon />
-                      ) : (
-                        <CopyIcon />
-                      )}
-                    </button>
-                  </div>
-                </div>
-
-                {/* Decimals */}
-                <div className="flex justify-between">
-                  <span className="text-slate-400">Decimals</span>
-                  <span className="text-white">{selectedAsset.decimals}</span>
-                </div>
-
-                {/* Domain */}
-                {selectedAsset.domain && (
-                  <div className="flex justify-between">
-                    <span className="text-slate-400">Domain</span>
-                    <span className="text-white">{selectedAsset.domain}</span>
-                  </div>
-                )}
-
-                {/* Type */}
-                <div className="flex justify-between">
-                  <span className="text-slate-400">Type</span>
-                  <span className="text-yellow-400">SAC (Requires Trustline)</span>
-                </div>
-              </div>
-
-              {error && (
-                <p className="text-red-400 text-sm">{error}</p>
-              )}
-
-              <div className="flex gap-3">
-                <button
-                  onClick={() => setSelectedAsset(null)}
-                  className="flex-1 py-3 bg-slate-700 hover:bg-slate-600 text-white rounded-lg font-medium transition-colors"
-                >
-                  Back
-                </button>
-                <button
-                  onClick={handleAddSelectedAsset}
-                  disabled={loading}
-                  className="flex-1 py-3 bg-purple-600 hover:bg-purple-700 disabled:bg-slate-600 text-white rounded-lg font-medium transition-colors"
-                >
-                  {loading ? 'Adding...' : 'Add Token'}
-                </button>
               </div>
             </div>
-          </>
-        ) : (
-          <>
-            {/* Manual Entry Mode */}
-            <div className="p-6 space-y-4">
-              <div>
-                <label className="block text-sm text-slate-400 mb-2">
-                  Contract Address *
-                </label>
-                <input
-                  type="text"
-                  value={manualAddress}
-                  onChange={(e) => setManualAddress(e.target.value)}
-                  placeholder="C..."
-                  className="w-full px-4 py-3 bg-slate-700 border border-slate-600 rounded-lg text-white placeholder-slate-500 focus:outline-none focus:border-purple-500"
-                />
-              </div>
+          )}
 
+          {manualMode && !loading && (
+            <div className="space-y-4">
+              <div className="p-3 rounded-xl bg-yellow-500/10 border border-yellow-500/20">
+                <p className="text-yellow-400 text-sm">Auto-detection failed. Please enter token info manually.</p>
+              </div>
+              
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-sm text-slate-400 mb-2">
-                    Symbol *
-                  </label>
+                  <label className="block text-sm text-gray-400 mb-2">Symbol *</label>
                   <input
                     type="text"
                     value={manualSymbol}
-                    onChange={(e) => setManualSymbol(e.target.value)}
-                    placeholder="e.g., USDC"
+                    onChange={(e) => setManualSymbol(e.target.value.toUpperCase())}
+                    placeholder="TOKEN"
                     maxLength={12}
-                    className="w-full px-4 py-3 bg-slate-700 border border-slate-600 rounded-lg text-white placeholder-slate-500 focus:outline-none focus:border-purple-500"
+                    className="w-full p-3 rounded-xl bg-gray-800 border border-gray-700 focus:border-purple-500 focus:outline-none"
                   />
                 </div>
                 <div>
-                  <label className="block text-sm text-slate-400 mb-2">
-                    Decimals
-                  </label>
+                  <label className="block text-sm text-gray-400 mb-2">Decimals</label>
                   <input
                     type="number"
                     value={manualDecimals}
-                    onChange={(e) => setManualDecimals(e.target.value)}
-                    placeholder="7"
-                    min="0"
-                    max="18"
-                    className="w-full px-4 py-3 bg-slate-700 border border-slate-600 rounded-lg text-white placeholder-slate-500 focus:outline-none focus:border-purple-500"
+                    onChange={(e) => setManualDecimals(parseInt(e.target.value) || 7)}
+                    min={0}
+                    max={18}
+                    className="w-full p-3 rounded-xl bg-gray-800 border border-gray-700 focus:border-purple-500 focus:outline-none"
                   />
                 </div>
               </div>
 
               <div>
-                <label className="block text-sm text-slate-400 mb-2">
-                  Name (optional)
-                </label>
+                <label className="block text-sm text-gray-400 mb-2">Token Name</label>
                 <input
                   type="text"
                   value={manualName}
                   onChange={(e) => setManualName(e.target.value)}
-                  placeholder="e.g., USD Coin"
-                  className="w-full px-4 py-3 bg-slate-700 border border-slate-600 rounded-lg text-white placeholder-slate-500 focus:outline-none focus:border-purple-500"
+                  placeholder="My Token"
+                  className="w-full p-3 rounded-xl bg-gray-800 border border-gray-700 focus:border-purple-500 focus:outline-none"
                 />
               </div>
-
-              {error && (
-                <p className="text-red-400 text-sm">{error}</p>
-              )}
-
-              <div className="flex gap-3">
-                <button
-                  onClick={() => {
-                    setManualMode(false);
-                    setError('');
-                  }}
-                  className="flex-1 py-3 bg-slate-700 hover:bg-slate-600 text-white rounded-lg font-medium transition-colors"
-                >
-                  Back
-                </button>
-                <button
-                  onClick={handleManualAdd}
-                  disabled={loading || !manualAddress.trim() || !manualSymbol.trim()}
-                  className="flex-1 py-3 bg-purple-600 hover:bg-purple-700 disabled:bg-slate-600 disabled:cursor-not-allowed text-white rounded-lg font-medium transition-colors"
-                >
-                  {loading ? 'Adding...' : 'Add Token'}
-                </button>
-              </div>
             </div>
-          </>
-        )}
+          )}
+
+          {tokenInfo && !manualMode && (
+            <button
+              onClick={() => setManualMode(true)}
+              className="text-sm text-gray-500 hover:text-gray-300 transition"
+            >
+              Edit manually instead
+            </button>
+          )}
+
+          {error && !manualMode && (
+            <p className="text-red-400 text-sm">{error}</p>
+          )}
+        </div>
+
+        <div className="p-6 border-t border-gray-700 flex gap-3">
+          <button 
+            onClick={() => {
+              setAddress('');
+              setTokenInfo(null);
+              setError('');
+              setManualMode(false);
+              onClose();
+            }} 
+            className="flex-1 px-4 py-3 rounded-xl bg-gray-700 hover:bg-gray-600 transition"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={handleSubmit}
+            disabled={loading || (!tokenInfo && !manualMode) || (manualMode && !manualSymbol)}
+            className="flex-1 px-4 py-3 rounded-xl bg-gradient-to-r from-purple-500 to-blue-500 hover:from-purple-600 hover:to-blue-600 disabled:opacity-50 disabled:cursor-not-allowed transition font-medium"
+          >
+            Add Token
+          </button>
+        </div>
       </div>
     </div>
   );
 };
+
+export default AddTokenModal;

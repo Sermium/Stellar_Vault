@@ -1,6 +1,8 @@
-import React, { useState, useEffect } from 'react';
+﻿import React, { useState, useEffect } from 'react';
 import { SUPPORTED_TOKENS, NATIVE_TOKEN } from '../../config';
 import { hasTrustline, ensureTrustline } from '../../lib/stellar';
+import * as StellarSdk from '@stellar/stellar-sdk';
+import { TokenIcon } from '../common/TokenIcon';
 
 interface DepositModalProps {
   vaultAddress: string | null;
@@ -8,6 +10,13 @@ interface DepositModalProps {
   loading: boolean;
   onClose: () => void;
   onSubmit: (token: string, amount: string) => void;
+}
+
+interface TokenBalance {
+  address: string;
+  symbol: string;
+  balance: string;
+  decimals: number;
 }
 
 export const DepositModal: React.FC<DepositModalProps> = ({
@@ -24,8 +33,58 @@ export const DepositModal: React.FC<DepositModalProps> = ({
   const [needsUserTrustline, setNeedsUserTrustline] = useState(false);
   const [needsVaultTrustline, setNeedsVaultTrustline] = useState(false);
   const [creatingTrustline, setCreatingTrustline] = useState(false);
+  const [userBalances, setUserBalances] = useState<TokenBalance[]>([]);
+  const [loadingBalances, setLoadingBalances] = useState(false);
 
   const selectedTokenInfo = SUPPORTED_TOKENS.find(t => t.address === selectedToken);
+  const selectedBalance = userBalances.find(b => b.address === selectedToken);
+
+  useEffect(() => {
+    if (userAddress) {
+      loadUserBalances();
+    }
+  }, [userAddress]);
+
+  const loadUserBalances = async () => {
+    if (!userAddress) return;
+    
+    setLoadingBalances(true);
+    try {
+      const server = new StellarSdk.Horizon.Server('https://horizon-testnet.stellar.org');
+      const account = await server.loadAccount(userAddress);
+      
+      const balances: TokenBalance[] = [];
+      
+      for (const balance of account.balances) {
+        if (balance.asset_type === 'native') {
+          balances.push({
+            address: NATIVE_TOKEN,
+            symbol: 'XLM',
+            balance: balance.balance,
+            decimals: 7,
+          });
+        } else if (balance.asset_type === 'credit_alphanum4' || balance.asset_type === 'credit_alphanum12') {
+          const token = SUPPORTED_TOKENS.find(t => 
+            t.symbol === balance.asset_code && t.issuer === balance.asset_issuer
+          );
+          if (token) {
+            balances.push({
+              address: token.address,
+              symbol: token.symbol,
+              balance: balance.balance,
+              decimals: token.decimals,
+            });
+          }
+        }
+      }
+      
+      setUserBalances(balances);
+    } catch (err) {
+      console.error('Error loading user balances:', err);
+    } finally {
+      setLoadingBalances(false);
+    }
+  };
 
   useEffect(() => {
     checkTrustlines();
@@ -38,7 +97,6 @@ export const DepositModal: React.FC<DepositModalProps> = ({
       return;
     }
 
-    // Skip trustline check for native XLM and non-SAC tokens
     if (selectedToken === NATIVE_TOKEN || !selectedTokenInfo?.isSAC) {
       setNeedsUserTrustline(false);
       setNeedsVaultTrustline(false);
@@ -76,6 +134,17 @@ export const DepositModal: React.FC<DepositModalProps> = ({
     }
   };
 
+  const handleSetMax = () => {
+    if (selectedBalance) {
+      if (selectedToken === NATIVE_TOKEN) {
+        const max = Math.max(0, parseFloat(selectedBalance.balance) - 2);
+        setAmount(max.toFixed(7));
+      } else {
+        setAmount(selectedBalance.balance);
+      }
+    }
+  };
+
   const handleSubmit = () => {
     setError('');
 
@@ -89,10 +158,22 @@ export const DepositModal: React.FC<DepositModalProps> = ({
       return;
     }
 
+    if (selectedBalance && parseFloat(amount) > parseFloat(selectedBalance.balance)) {
+      setError('Insufficient balance');
+      return;
+    }
+
     const decimals = selectedTokenInfo?.decimals || 7;
     const amountInStroops = (parseFloat(amount) * Math.pow(10, decimals)).toString();
 
     onSubmit(selectedToken, amountInStroops);
+  };
+
+  const formatBalance = (balance: string): string => {
+    const num = parseFloat(balance);
+    if (num === 0) return '0';
+    if (num < 0.0001) return '<0.0001';
+    return num.toLocaleString(undefined, { maximumFractionDigits: 4 });
   };
 
   return (
@@ -104,33 +185,38 @@ export const DepositModal: React.FC<DepositModalProps> = ({
         </div>
 
         <div className="p-6 space-y-4">
-          {/* Token Selection */}
           <div>
             <label className="block text-sm text-gray-400 mb-2">Token</label>
             <div className="grid grid-cols-3 gap-2">
-              {SUPPORTED_TOKENS.map((token) => (
-                <button
-                  key={token.address}
-                  onClick={() => setSelectedToken(token.address)}
-                  className={`p-3 rounded-xl border transition flex flex-col items-center gap-2 ${
-                    selectedToken === token.address
-                      ? 'border-purple-500 bg-purple-500/10'
-                      : 'border-gray-700 hover:border-gray-600'
-                  }`}
-                >
-                  <span className="text-2xl">{token.icon}</span>
-                  <div className="text-center">
-                    <p className="font-semibold text-sm">{token.symbol}</p>
-                    {token.isSAC && !token.isNative && (
-                      <p className="text-xs text-gray-500">SAC</p>
-                    )}
-                  </div>
-                </button>
-              ))}
+              {SUPPORTED_TOKENS.map((token) => {
+                const balance = userBalances.find(b => b.address === token.address);
+                return (
+                  <button
+                    key={token.address}
+                    onClick={() => setSelectedToken(token.address)}
+                    className={`p-3 rounded-xl border transition flex flex-col items-center gap-1 ${
+                      selectedToken === token.address
+                        ? 'border-purple-500 bg-purple-500/10'
+                        : 'border-gray-700 hover:border-gray-600'
+                    }`}
+                  >
+                    <TokenIcon symbol={token.symbol} size="w-8 h-8" />
+                    <div className="text-center">
+                      <p className="font-semibold text-sm">{token.symbol}</p>
+                      {loadingBalances ? (
+                        <p className="text-xs text-gray-500">...</p>
+                      ) : balance ? (
+                        <p className="text-xs text-gray-400">{formatBalance(balance.balance)}</p>
+                      ) : (
+                        <p className="text-xs text-gray-600">0</p>
+                      )}
+                    </div>
+                  </button>
+                );
+              })}
             </div>
           </div>
 
-          {/* Trustline Warnings - Only for SAC tokens */}
           {checkingTrustline && (
             <div className="p-3 rounded-xl bg-gray-800/50 text-gray-400 text-sm flex items-center gap-2">
               <div className="animate-spin w-4 h-4 border-2 border-gray-400 border-t-transparent rounded-full"></div>
@@ -141,7 +227,7 @@ export const DepositModal: React.FC<DepositModalProps> = ({
           {needsUserTrustline && !checkingTrustline && (
             <div className="p-4 rounded-xl bg-yellow-500/10 border border-yellow-500/20">
               <p className="text-yellow-400 text-sm mb-3">
-                ⚠️ You need to authorize {selectedTokenInfo?.symbol} before you can use it
+                You need to authorize {selectedTokenInfo?.symbol} before you can use it
               </p>
               <button
                 onClick={handleCreateUserTrustline}
@@ -156,16 +242,25 @@ export const DepositModal: React.FC<DepositModalProps> = ({
           {needsVaultTrustline && !needsUserTrustline && !checkingTrustline && (
             <div className="p-4 rounded-xl bg-blue-500/10 border border-blue-500/20">
               <p className="text-blue-400 text-sm">
-                ℹ️ The vault needs a trustline for {selectedTokenInfo?.symbol}. This will be created with the deposit.
+                The vault needs a trustline for {selectedTokenInfo?.symbol}. This will be created with the deposit.
               </p>
             </div>
           )}
 
-          {/* Amount */}
           <div>
-            <label className="block text-sm text-gray-400 mb-2">
-              Amount ({selectedTokenInfo?.symbol})
-            </label>
+            <div className="flex justify-between items-center mb-2">
+              <label className="text-sm text-gray-400">
+                Amount ({selectedTokenInfo?.symbol})
+              </label>
+              {selectedBalance && (
+                <button
+                  onClick={handleSetMax}
+                  className="text-xs text-purple-400 hover:text-purple-300 transition"
+                >
+                  Max: {formatBalance(selectedBalance.balance)}
+                </button>
+              )}
+            </div>
             <input
               type="number"
               step="0.0000001"
@@ -177,7 +272,6 @@ export const DepositModal: React.FC<DepositModalProps> = ({
             />
           </div>
 
-          {/* Summary */}
           {amount && parseFloat(amount) > 0 && (
             <div className="p-4 rounded-xl bg-gradient-to-br from-green-500/10 to-emerald-500/10 border border-green-500/20">
               <p className="text-sm text-gray-400">You will deposit</p>

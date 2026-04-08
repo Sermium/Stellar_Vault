@@ -1,0 +1,1536 @@
+﻿#![no_std]
+use soroban_sdk::{
+    contract, contractimpl, contracttype, contracterror, token, Address, Env, Symbol, String, Vec,
+};
+
+// ============ CONSTANTS ============
+const FEE_RECIPIENT: &str = "GDI33VCZUVNOPLHPBL5AIQXRO34XY2U4OLS3GFBPJRGGSA2UUCWTE37R";
+const NATIVE_TOKEN: &str = "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC";
+const DEFAULT_TX_FEE: i128 = 1_000_000; // 0.1 XLM
+const MAX_BATCH_SIZE: u32 = 50;
+
+// ============ TYPES ============
+#[contracttype]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u32)]
+pub enum Role {
+    SuperAdmin = 0,  // Full control, bypasses threshold
+    Admin = 1,       // Admin actions require threshold approval
+    Executor = 2,    // Can propose/approve/execute
+}
+
+#[contracttype]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u32)]
+pub enum ProposalStatus {
+    Pending = 0,
+    Approved = 1,
+    Executed = 2,
+    Rejected = 3,
+}
+
+#[contracttype]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u32)]
+pub enum ProposalType {
+    Transfer = 0,
+    TimeLock = 1,
+    VestingLock = 2,
+    AddSigner = 3,
+    RemoveSigner = 4,
+    SetRole = 5,
+    SetThreshold = 6,
+}
+
+#[contracttype]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u32)]
+pub enum LockType {
+    TimeLock = 0,
+    Vesting = 1,
+}
+
+#[contracttype]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u32)]
+pub enum LockStatus {
+    Active = 0,
+    PartiallyReleased = 1,
+    FullyReleased = 2,
+    Cancelled = 3,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct VaultConfig {
+    pub name: Symbol,
+    pub signer_count: u32,
+    pub threshold: u32,
+    pub tx_fee_amount: i128,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct Proposal {
+    pub id: u64,
+    pub proposal_type: ProposalType,
+    pub proposer: Address,
+    pub token: Address,
+    pub recipient: Address,  // For transfers: recipient, For locks: beneficiary, For admin: target signer
+    pub amount: i128,        // For SetThreshold: new_threshold as i128, For SetRole: new_role as i128
+    pub status: ProposalStatus,
+    pub approvals: Vec<Address>,
+    pub cancel_approvals: Vec<Address>,
+    pub created_at: u64,
+    // Lock-specific fields
+    pub lock_start_time: u64,
+    pub lock_end_time: u64,
+    pub lock_cliff_time: u64,
+    pub lock_release_intervals: u64,
+    pub lock_revocable: bool,
+    pub lock_description: Symbol,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct SpendLimit {
+    pub token: Address,
+    pub daily_limit: i128,
+    pub spent_today: i128,
+    pub last_reset: u64,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct AssetLock {
+    pub id: u64,
+    pub creator: Address,
+    pub beneficiary: Address,
+    pub token: Address,
+    pub total_amount: i128,
+    pub released_amount: i128,
+    pub lock_type: LockType,
+    pub status: LockStatus,
+    pub created_at: u64,
+    pub start_time: u64,
+    pub end_time: u64,
+    pub cliff_time: u64,
+    pub release_intervals: u64,
+    pub revocable: bool,
+    pub description: Symbol,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct LockInfo {
+    pub total_locked: i128,
+    pub available_to_claim: i128,
+    pub already_claimed: i128,
+    pub next_unlock_time: u64,
+    pub percent_unlocked: u32,
+}
+
+#[contracttype]
+pub enum StorageKey {
+    Config,
+    Signers,
+    SignerRole(Address),
+    Proposal(u64),
+    ProposalCount,
+    SpendLimit(Address),
+    Initialized,
+    FeeRecipient,
+    FeeToken,
+    Lock(u64),
+    LockCount,
+    TokenLockedAmount(Address),
+}
+
+// ============ ERRORS ============
+#[contracterror]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
+#[repr(u32)]
+pub enum VaultError {
+    NotInitialized = 1,
+    AlreadyInitialized = 2,
+    NotAuthorized = 3,
+    NotSigner = 4,
+    InvalidThreshold = 5,
+    ProposalNotFound = 6,
+    AlreadyApproved = 7,
+    NotEnoughApprovals = 8,
+    AlreadyExecuted = 9,
+    SpendLimitExceeded = 10,
+    InvalidAmount = 11,
+    TransferFailed = 12,
+    SignerAlreadyExists = 13,
+    CannotRemoveLastSuperAdmin = 14,
+    InvalidRole = 15,
+    InsufficientBalance = 16,
+    FeeFailed = 17,
+    LockNotFound = 18,
+    LockNotActive = 19,
+    NothingToRelease = 20,
+    CliffNotReached = 21,
+    LockNotRevocable = 22,
+    InvalidTimeRange = 23,
+    InsufficientUnlockedBalance = 24,
+    BatchTooLarge = 25,
+    AlreadyRejected = 26,
+    NoCancelRequest = 27,
+}
+
+#[contract]
+pub struct StellarVault;
+
+#[contractimpl]
+impl StellarVault {
+    // ============ INITIALIZATION ============
+    pub fn initialize(
+        env: Env,
+        name: Symbol,
+        signers: Vec<Address>,
+        threshold: u32,
+    ) -> Result<(), VaultError> {
+        if env.storage().instance().has(&StorageKey::Initialized) {
+            return Err(VaultError::AlreadyInitialized);
+        }
+
+        if signers.is_empty() || threshold == 0 || threshold > signers.len() as u32 {
+            return Err(VaultError::InvalidThreshold);
+        }
+
+        let config = VaultConfig {
+            name,
+            signer_count: signers.len() as u32,
+            threshold,
+            tx_fee_amount: DEFAULT_TX_FEE,
+        };
+
+        env.storage().instance().set(&StorageKey::Config, &config);
+        env.storage().instance().set(&StorageKey::Signers, &signers);
+        env.storage().instance().set(&StorageKey::ProposalCount, &0u64);
+        env.storage().instance().set(&StorageKey::LockCount, &0u64);
+
+        let fee_recipient = Address::from_string(&String::from_str(&env, FEE_RECIPIENT));
+        let fee_token = Address::from_string(&String::from_str(&env, NATIVE_TOKEN));
+        env.storage().instance().set(&StorageKey::FeeRecipient, &fee_recipient);
+        env.storage().instance().set(&StorageKey::FeeToken, &fee_token);
+
+        // First signer is SuperAdmin, rest are Executors
+        for (i, signer) in signers.iter().enumerate() {
+            let role = if i == 0 { Role::SuperAdmin } else { Role::Executor };
+            env.storage().instance().set(&StorageKey::SignerRole(signer), &role);
+        }
+
+        env.storage().instance().set(&StorageKey::Initialized, &true);
+        Ok(())
+    }
+
+    // ============ FEE COLLECTION ============
+    fn collect_fee(env: &Env, payer: &Address) -> Result<(), VaultError> {
+        let config: VaultConfig = env.storage().instance().get(&StorageKey::Config).unwrap();
+        let fee_recipient: Address = env.storage().instance().get(&StorageKey::FeeRecipient).unwrap();
+        let fee_token: Address = env.storage().instance().get(&StorageKey::FeeToken).unwrap();
+
+        if config.tx_fee_amount > 0 {
+            let token_client = token::Client::new(env, &fee_token);
+            token_client.transfer(payer, &fee_recipient, &config.tx_fee_amount);
+        }
+        Ok(())
+    }
+
+    // ============ ROLE MANAGEMENT ============
+    fn require_initialized(env: &Env) -> Result<(), VaultError> {
+        if !env.storage().instance().has(&StorageKey::Initialized) {
+            return Err(VaultError::NotInitialized);
+        }
+        Ok(())
+    }
+
+    fn require_signer(env: &Env, address: &Address) -> Result<(), VaultError> {
+        let signers: Vec<Address> = env.storage().instance().get(&StorageKey::Signers).unwrap();
+        if !signers.contains(address) {
+            return Err(VaultError::NotSigner);
+        }
+        Ok(())
+    }
+
+    fn require_role(env: &Env, address: &Address, required_role: Role) -> Result<(), VaultError> {
+        Self::require_signer(env, address)?;
+        let role: Role = env.storage().instance()
+            .get(&StorageKey::SignerRole(address.clone()))
+            .unwrap_or(Role::Executor);
+        if role as u32 > required_role as u32 {
+            return Err(VaultError::NotAuthorized);
+        }
+        Ok(())
+    }
+
+    fn is_super_admin(env: &Env, address: &Address) -> bool {
+        if Self::require_signer(env, address).is_err() {
+            return false;
+        }
+        let role: Role = env.storage().instance()
+            .get(&StorageKey::SignerRole(address.clone()))
+            .unwrap_or(Role::Executor);
+        role == Role::SuperAdmin
+    }
+
+    fn count_super_admins(env: &Env) -> u32 {
+        let signers: Vec<Address> = env.storage().instance().get(&StorageKey::Signers).unwrap();
+        let mut count = 0u32;
+        for signer in signers.iter() {
+            let role: Role = env.storage().instance()
+                .get(&StorageKey::SignerRole(signer))
+                .unwrap_or(Role::Executor);
+            if role == Role::SuperAdmin {
+                count += 1;
+            }
+        }
+        count
+    }
+
+    // SuperAdmin can directly set roles (bypasses threshold)
+    pub fn set_role(env: Env, caller: Address, signer: Address, new_role: Role) -> Result<(), VaultError> {
+        caller.require_auth();
+        Self::require_initialized(&env)?;
+        Self::require_signer(&env, &signer)?;
+
+        // Only SuperAdmin can directly set roles
+        if !Self::is_super_admin(&env, &caller) {
+            return Err(VaultError::NotAuthorized);
+        }
+
+        let current_role: Role = env.storage().instance()
+            .get(&StorageKey::SignerRole(signer.clone()))
+            .unwrap_or(Role::Executor);
+
+        // Cannot demote the last SuperAdmin
+        if current_role == Role::SuperAdmin && new_role != Role::SuperAdmin {
+            let super_admin_count = Self::count_super_admins(&env);
+            if super_admin_count <= 1 {
+                return Err(VaultError::CannotRemoveLastSuperAdmin);
+            }
+        }
+
+        Self::collect_fee(&env, &caller)?;
+        env.storage().instance().set(&StorageKey::SignerRole(signer), &new_role);
+        Ok(())
+    }
+
+    // Propose a role change (for Admins - requires threshold)
+    pub fn propose_set_role(env: Env, proposer: Address, target_signer: Address, new_role: Role) -> Result<u64, VaultError> {
+        proposer.require_auth();
+        Self::require_initialized(&env)?;
+        Self::require_role(&env, &proposer, Role::Admin)?;
+        Self::require_signer(&env, &target_signer)?;
+
+        Self::collect_fee(&env, &proposer)?;
+
+        // Use amount field to store new_role as i128
+        Self::create_proposal(
+            &env,
+            proposer,
+            ProposalType::SetRole,
+            env.current_contract_address(), // dummy token
+            target_signer,
+            new_role as i128,
+            0, 0, 0, 0, false,
+            Symbol::new(&env, ""),
+        )
+    }
+
+    pub fn get_role(env: Env, signer: Address) -> Result<Role, VaultError> {
+        Self::require_initialized(&env)?;
+        let role: Role = env.storage().instance()
+            .get(&StorageKey::SignerRole(signer))
+            .unwrap_or(Role::Executor);
+        Ok(role)
+    }
+
+    // ============ SIGNER MANAGEMENT ============
+    
+    // SuperAdmin can directly add signers (bypasses threshold)
+    pub fn add_signer(env: Env, caller: Address, new_signer: Address, role: Role) -> Result<(), VaultError> {
+        caller.require_auth();
+        Self::require_initialized(&env)?;
+
+        // Only SuperAdmin can directly add signers
+        if !Self::is_super_admin(&env, &caller) {
+            return Err(VaultError::NotAuthorized);
+        }
+
+        let mut signers: Vec<Address> = env.storage().instance().get(&StorageKey::Signers).unwrap();
+        if signers.contains(&new_signer) {
+            return Err(VaultError::SignerAlreadyExists);
+        }
+
+        Self::collect_fee(&env, &caller)?;
+
+        signers.push_back(new_signer.clone());
+        let mut config: VaultConfig = env.storage().instance().get(&StorageKey::Config).unwrap();
+        config.signer_count = signers.len() as u32;
+
+        env.storage().instance().set(&StorageKey::Signers, &signers);
+        env.storage().instance().set(&StorageKey::Config, &config);
+        env.storage().instance().set(&StorageKey::SignerRole(new_signer), &role);
+        Ok(())
+    }
+
+    // Propose adding a signer (for Admins - requires threshold)
+    pub fn propose_add_signer(env: Env, proposer: Address, new_signer: Address, role: Role) -> Result<u64, VaultError> {
+        proposer.require_auth();
+        Self::require_initialized(&env)?;
+        Self::require_role(&env, &proposer, Role::Admin)?;
+
+        let signers: Vec<Address> = env.storage().instance().get(&StorageKey::Signers).unwrap();
+        if signers.contains(&new_signer) {
+            return Err(VaultError::SignerAlreadyExists);
+        }
+
+        Self::collect_fee(&env, &proposer)?;
+
+        // Use amount field to store role as i128
+        Self::create_proposal(
+            &env,
+            proposer,
+            ProposalType::AddSigner,
+            env.current_contract_address(), // dummy token
+            new_signer,
+            role as i128,
+            0, 0, 0, 0, false,
+            Symbol::new(&env, ""),
+        )
+    }
+
+    // SuperAdmin can directly remove signers (bypasses threshold)
+    pub fn remove_signer(env: Env, caller: Address, signer_to_remove: Address) -> Result<(), VaultError> {
+        caller.require_auth();
+        Self::require_initialized(&env)?;
+
+        // Only SuperAdmin can directly remove signers
+        if !Self::is_super_admin(&env, &caller) {
+            return Err(VaultError::NotAuthorized);
+        }
+
+        Self::require_signer(&env, &signer_to_remove)?;
+
+        let role: Role = env.storage().instance()
+            .get(&StorageKey::SignerRole(signer_to_remove.clone()))
+            .unwrap_or(Role::Executor);
+
+        // Cannot remove the last SuperAdmin
+        if role == Role::SuperAdmin {
+            let super_admin_count = Self::count_super_admins(&env);
+            if super_admin_count <= 1 {
+                return Err(VaultError::CannotRemoveLastSuperAdmin);
+            }
+        }
+
+        let mut config: VaultConfig = env.storage().instance().get(&StorageKey::Config).unwrap();
+        if config.signer_count <= config.threshold {
+            return Err(VaultError::InvalidThreshold);
+        }
+
+        Self::collect_fee(&env, &caller)?;
+
+        let signers: Vec<Address> = env.storage().instance().get(&StorageKey::Signers).unwrap();
+        let mut new_signers = Vec::new(&env);
+        for s in signers.iter() {
+            if s != signer_to_remove {
+                new_signers.push_back(s);
+            }
+        }
+
+        config.signer_count = new_signers.len() as u32;
+        env.storage().instance().set(&StorageKey::Signers, &new_signers);
+        env.storage().instance().set(&StorageKey::Config, &config);
+        env.storage().instance().remove(&StorageKey::SignerRole(signer_to_remove));
+        Ok(())
+    }
+
+    // Propose removing a signer (for Admins - requires threshold)
+    pub fn propose_remove_signer(env: Env, proposer: Address, signer_to_remove: Address) -> Result<u64, VaultError> {
+        proposer.require_auth();
+        Self::require_initialized(&env)?;
+        Self::require_role(&env, &proposer, Role::Admin)?;
+        Self::require_signer(&env, &signer_to_remove)?;
+
+        Self::collect_fee(&env, &proposer)?;
+
+        Self::create_proposal(
+            &env,
+            proposer,
+            ProposalType::RemoveSigner,
+            env.current_contract_address(), // dummy token
+            signer_to_remove,
+            0,
+            0, 0, 0, 0, false,
+            Symbol::new(&env, ""),
+        )
+    }
+
+    pub fn leave_vault(env: Env, signer: Address) -> Result<(), VaultError> {
+        signer.require_auth();
+        Self::require_initialized(&env)?;
+        Self::require_signer(&env, &signer)?;
+
+        let mut config: VaultConfig = env.storage().instance().get(&StorageKey::Config).unwrap();
+        let signers: Vec<Address> = env.storage().instance().get(&StorageKey::Signers).unwrap();
+
+        if signers.len() == 1 {
+            Self::collect_fee(&env, &signer)?;
+            env.storage().instance().set(&StorageKey::Signers, &Vec::<Address>::new(&env));
+            config.signer_count = 0;
+            env.storage().instance().set(&StorageKey::Config, &config);
+            env.storage().instance().remove(&StorageKey::SignerRole(signer));
+            return Ok(());
+        }
+
+        let role: Role = env.storage().instance()
+            .get(&StorageKey::SignerRole(signer.clone()))
+            .unwrap_or(Role::Executor);
+
+        // Cannot leave if last SuperAdmin
+        if role == Role::SuperAdmin {
+            let super_admin_count = Self::count_super_admins(&env);
+            if super_admin_count <= 1 {
+                return Err(VaultError::CannotRemoveLastSuperAdmin);
+            }
+        }
+
+        if config.signer_count <= config.threshold {
+            return Err(VaultError::InvalidThreshold);
+        }
+
+        Self::collect_fee(&env, &signer)?;
+
+        let mut new_signers = Vec::new(&env);
+        for s in signers.iter() {
+            if s != signer {
+                new_signers.push_back(s);
+            }
+        }
+
+        config.signer_count = new_signers.len() as u32;
+        env.storage().instance().set(&StorageKey::Signers, &new_signers);
+        env.storage().instance().set(&StorageKey::Config, &config);
+        env.storage().instance().remove(&StorageKey::SignerRole(signer));
+        Ok(())
+    }
+
+    // SuperAdmin can directly set threshold (bypasses threshold)
+    pub fn set_threshold(env: Env, caller: Address, new_threshold: u32) -> Result<(), VaultError> {
+        caller.require_auth();
+        Self::require_initialized(&env)?;
+
+        // Only SuperAdmin can directly set threshold
+        if !Self::is_super_admin(&env, &caller) {
+            return Err(VaultError::NotAuthorized);
+        }
+
+        let mut config: VaultConfig = env.storage().instance().get(&StorageKey::Config).unwrap();
+        if new_threshold == 0 || new_threshold > config.signer_count {
+            return Err(VaultError::InvalidThreshold);
+        }
+
+        Self::collect_fee(&env, &caller)?;
+        config.threshold = new_threshold;
+        env.storage().instance().set(&StorageKey::Config, &config);
+        Ok(())
+    }
+
+    // Propose setting threshold (for Admins - requires threshold)
+    pub fn propose_set_threshold(env: Env, proposer: Address, new_threshold: u32) -> Result<u64, VaultError> {
+        proposer.require_auth();
+        Self::require_initialized(&env)?;
+        Self::require_role(&env, &proposer, Role::Admin)?;
+
+        let config: VaultConfig = env.storage().instance().get(&StorageKey::Config).unwrap();
+        if new_threshold == 0 || new_threshold > config.signer_count {
+            return Err(VaultError::InvalidThreshold);
+        }
+
+        Self::collect_fee(&env, &proposer)?;
+
+        // Use amount field to store new_threshold as i128
+        Self::create_proposal(
+            &env,
+            proposer,
+            ProposalType::SetThreshold,
+            env.current_contract_address(), // dummy token
+            env.current_contract_address(), // dummy recipient
+            new_threshold as i128,
+            0, 0, 0, 0, false,
+            Symbol::new(&env, ""),
+        )
+    }
+
+    // ============ ASSET LOCKING (INTERNAL) ============
+    fn get_locked_amount(env: &Env, token: &Address) -> i128 {
+        env.storage().instance()
+            .get(&StorageKey::TokenLockedAmount(token.clone()))
+            .unwrap_or(0i128)
+    }
+
+    fn update_locked_amount(env: &Env, token: &Address, delta: i128) {
+        let current = Self::get_locked_amount(env, token);
+        let new_amount = current + delta;
+        if new_amount <= 0 {
+            env.storage().instance().remove(&StorageKey::TokenLockedAmount(token.clone()));
+        } else {
+            env.storage().instance().set(&StorageKey::TokenLockedAmount(token.clone()), &new_amount);
+        }
+    }
+
+    fn next_lock_id(env: &Env) -> u64 {
+        let count: u64 = env.storage().instance().get(&StorageKey::LockCount).unwrap_or(0);
+        env.storage().instance().set(&StorageKey::LockCount, &(count + 1));
+        count + 1
+    }
+
+    fn create_time_lock_internal(
+        env: &Env,
+        creator: Address,
+        beneficiary: Address,
+        token: Address,
+        amount: i128,
+        unlock_time: u64,
+        revocable: bool,
+        description: Symbol,
+    ) -> Result<u64, VaultError> {
+        let current_time = env.ledger().timestamp();
+
+        let lock_id = Self::next_lock_id(env);
+        let lock = AssetLock {
+            id: lock_id,
+            creator,
+            beneficiary,
+            token: token.clone(),
+            total_amount: amount,
+            released_amount: 0,
+            lock_type: LockType::TimeLock,
+            status: LockStatus::Active,
+            created_at: current_time,
+            start_time: current_time,
+            end_time: unlock_time,
+            cliff_time: 0,
+            release_intervals: 0,
+            revocable,
+            description,
+        };
+
+        env.storage().instance().set(&StorageKey::Lock(lock_id), &lock);
+        Self::update_locked_amount(env, &token, amount);
+
+        Ok(lock_id)
+    }
+
+    fn create_vesting_lock_internal(
+        env: &Env,
+        creator: Address,
+        beneficiary: Address,
+        token: Address,
+        amount: i128,
+        start_time: u64,
+        cliff_time: u64,
+        end_time: u64,
+        release_intervals: u64,
+        revocable: bool,
+        description: Symbol,
+    ) -> Result<u64, VaultError> {
+        let current_time = env.ledger().timestamp();
+
+        let lock_id = Self::next_lock_id(env);
+        let lock = AssetLock {
+            id: lock_id,
+            creator,
+            beneficiary,
+            token: token.clone(),
+            total_amount: amount,
+            released_amount: 0,
+            lock_type: LockType::Vesting,
+            status: LockStatus::Active,
+            created_at: current_time,
+            start_time,
+            end_time,
+            cliff_time,
+            release_intervals,
+            revocable,
+            description,
+        };
+
+        env.storage().instance().set(&StorageKey::Lock(lock_id), &lock);
+        Self::update_locked_amount(env, &token, amount);
+
+        Ok(lock_id)
+    }
+
+    // Internal: Execute add signer from proposal
+    fn execute_add_signer(env: &Env, new_signer: Address, role: Role) -> Result<(), VaultError> {
+        let mut signers: Vec<Address> = env.storage().instance().get(&StorageKey::Signers).unwrap();
+        if signers.contains(&new_signer) {
+            return Err(VaultError::SignerAlreadyExists);
+        }
+
+        signers.push_back(new_signer.clone());
+        let mut config: VaultConfig = env.storage().instance().get(&StorageKey::Config).unwrap();
+        config.signer_count = signers.len() as u32;
+
+        env.storage().instance().set(&StorageKey::Signers, &signers);
+        env.storage().instance().set(&StorageKey::Config, &config);
+        env.storage().instance().set(&StorageKey::SignerRole(new_signer), &role);
+        Ok(())
+    }
+
+    // Internal: Execute remove signer from proposal
+    fn execute_remove_signer(env: &Env, signer_to_remove: Address) -> Result<(), VaultError> {
+        let role: Role = env.storage().instance()
+            .get(&StorageKey::SignerRole(signer_to_remove.clone()))
+            .unwrap_or(Role::Executor);
+
+        if role == Role::SuperAdmin {
+            let super_admin_count = Self::count_super_admins(env);
+            if super_admin_count <= 1 {
+                return Err(VaultError::CannotRemoveLastSuperAdmin);
+            }
+        }
+
+        let mut config: VaultConfig = env.storage().instance().get(&StorageKey::Config).unwrap();
+        if config.signer_count <= config.threshold {
+            return Err(VaultError::InvalidThreshold);
+        }
+
+        let signers: Vec<Address> = env.storage().instance().get(&StorageKey::Signers).unwrap();
+        let mut new_signers = Vec::new(env);
+        for s in signers.iter() {
+            if s != signer_to_remove {
+                new_signers.push_back(s);
+            }
+        }
+
+        config.signer_count = new_signers.len() as u32;
+        env.storage().instance().set(&StorageKey::Signers, &new_signers);
+        env.storage().instance().set(&StorageKey::Config, &config);
+        env.storage().instance().remove(&StorageKey::SignerRole(signer_to_remove));
+        Ok(())
+    }
+
+    // Internal: Execute set role from proposal
+    fn execute_set_role(env: &Env, signer: Address, new_role: Role) -> Result<(), VaultError> {
+        let current_role: Role = env.storage().instance()
+            .get(&StorageKey::SignerRole(signer.clone()))
+            .unwrap_or(Role::Executor);
+
+        if current_role == Role::SuperAdmin && new_role != Role::SuperAdmin {
+            let super_admin_count = Self::count_super_admins(env);
+            if super_admin_count <= 1 {
+                return Err(VaultError::CannotRemoveLastSuperAdmin);
+            }
+        }
+
+        env.storage().instance().set(&StorageKey::SignerRole(signer), &new_role);
+        Ok(())
+    }
+
+    // Internal: Execute set threshold from proposal
+    fn execute_set_threshold(env: &Env, new_threshold: u32) -> Result<(), VaultError> {
+        let mut config: VaultConfig = env.storage().instance().get(&StorageKey::Config).unwrap();
+        if new_threshold == 0 || new_threshold > config.signer_count {
+            return Err(VaultError::InvalidThreshold);
+        }
+
+        config.threshold = new_threshold;
+        env.storage().instance().set(&StorageKey::Config, &config);
+        Ok(())
+    }
+
+    fn calculate_available(env: &Env, lock: &AssetLock) -> Result<i128, VaultError> {
+        if lock.status != LockStatus::Active && lock.status != LockStatus::PartiallyReleased {
+            return Err(VaultError::LockNotActive);
+        }
+
+        let current_time = env.ledger().timestamp();
+        let remaining = lock.total_amount - lock.released_amount;
+
+        match lock.lock_type {
+            LockType::TimeLock => {
+                if current_time >= lock.end_time {
+                    Ok(remaining)
+                } else {
+                    Ok(0)
+                }
+            }
+            LockType::Vesting => {
+                if current_time < lock.cliff_time {
+                    return Ok(0);
+                }
+
+                let vesting_duration = lock.end_time - lock.start_time;
+                let elapsed = if current_time >= lock.end_time {
+                    vesting_duration
+                } else {
+                    current_time - lock.start_time
+                };
+
+                let total_vested = if elapsed >= vesting_duration {
+                    lock.total_amount
+                } else if lock.release_intervals > 0 {
+                    let intervals_passed = elapsed / lock.release_intervals;
+                    let total_intervals = vesting_duration / lock.release_intervals;
+                    (lock.total_amount * intervals_passed as i128) / total_intervals as i128
+                } else {
+                    (lock.total_amount * elapsed as i128) / vesting_duration as i128
+                };
+
+                let available = total_vested - lock.released_amount;
+                Ok(if available > 0 { available } else { 0 })
+            }
+        }
+    }
+
+    pub fn claim_lock(env: Env, caller: Address, lock_id: u64) -> Result<i128, VaultError> {
+        caller.require_auth();
+        Self::require_initialized(&env)?;
+
+        let mut lock: AssetLock = env.storage().instance()
+            .get(&StorageKey::Lock(lock_id))
+            .ok_or(VaultError::LockNotFound)?;
+
+        let is_beneficiary = lock.beneficiary == caller;
+        let is_admin = Self::require_role(&env, &caller, Role::Admin).is_ok();
+
+        if !is_beneficiary && !is_admin {
+            return Err(VaultError::NotAuthorized);
+        }
+
+        let available = Self::calculate_available(&env, &lock)?;
+        if available <= 0 {
+            return Err(VaultError::NothingToRelease);
+        }
+
+        Self::collect_fee(&env, &caller)?;
+
+        let token_client = token::Client::new(&env, &lock.token);
+        token_client.transfer(&env.current_contract_address(), &lock.beneficiary, &available);
+
+        lock.released_amount += available;
+        if lock.released_amount >= lock.total_amount {
+            lock.status = LockStatus::FullyReleased;
+        } else {
+            lock.status = LockStatus::PartiallyReleased;
+        }
+
+        env.storage().instance().set(&StorageKey::Lock(lock_id), &lock);
+        Self::update_locked_amount(&env, &lock.token, -available);
+
+        Ok(available)
+    }
+
+    pub fn cancel_lock(env: Env, caller: Address, lock_id: u64) -> Result<i128, VaultError> {
+        caller.require_auth();
+        Self::require_initialized(&env)?;
+        
+        // Only SuperAdmin or Admin can cancel locks
+        Self::require_role(&env, &caller, Role::Admin)?;
+
+        let mut lock: AssetLock = env.storage().instance()
+            .get(&StorageKey::Lock(lock_id))
+            .ok_or(VaultError::LockNotFound)?;
+
+        if !lock.revocable {
+            return Err(VaultError::LockNotRevocable);
+        }
+
+        if lock.status != LockStatus::Active && lock.status != LockStatus::PartiallyReleased {
+            return Err(VaultError::LockNotActive);
+        }
+
+        Self::collect_fee(&env, &caller)?;
+
+        let remaining = lock.total_amount - lock.released_amount;
+        lock.released_amount = lock.total_amount;
+        lock.status = LockStatus::Cancelled;
+
+        env.storage().instance().set(&StorageKey::Lock(lock_id), &lock);
+        Self::update_locked_amount(&env, &lock.token, -remaining);
+
+        Ok(remaining)
+    }
+
+    pub fn get_lock(env: Env, lock_id: u64) -> Result<AssetLock, VaultError> {
+        Self::require_initialized(&env)?;
+        env.storage().instance()
+            .get(&StorageKey::Lock(lock_id))
+            .ok_or(VaultError::LockNotFound)
+    }
+
+    pub fn get_lock_info(env: Env, lock_id: u64) -> Result<LockInfo, VaultError> {
+        Self::require_initialized(&env)?;
+        let lock: AssetLock = env.storage().instance()
+            .get(&StorageKey::Lock(lock_id))
+            .ok_or(VaultError::LockNotFound)?;
+
+        let available = Self::calculate_available(&env, &lock).unwrap_or(0);
+        let current_time = env.ledger().timestamp();
+
+        let next_unlock = match lock.lock_type {
+            LockType::TimeLock => lock.end_time,
+            LockType::Vesting => {
+                if current_time < lock.cliff_time {
+                    lock.cliff_time
+                } else if lock.release_intervals > 0 {
+                    let elapsed = current_time - lock.start_time;
+                    let next_interval = ((elapsed / lock.release_intervals) + 1) * lock.release_intervals;
+                    lock.start_time + next_interval
+                } else {
+                    current_time
+                }
+            }
+        };
+
+        let percent = if lock.total_amount > 0 {
+            ((lock.released_amount + available) * 100 / lock.total_amount) as u32
+        } else {
+            0
+        };
+
+        Ok(LockInfo {
+            total_locked: lock.total_amount,
+            available_to_claim: available,
+            already_claimed: lock.released_amount,
+            next_unlock_time: next_unlock,
+            percent_unlocked: percent,
+        })
+    }
+
+    pub fn get_token_locked_amount(env: Env, token: Address) -> Result<i128, VaultError> {
+        Self::require_initialized(&env)?;
+        Ok(Self::get_locked_amount(&env, &token))
+    }
+
+    pub fn get_lock_count(env: Env) -> Result<u64, VaultError> {
+        Self::require_initialized(&env)?;
+        Ok(env.storage().instance().get(&StorageKey::LockCount).unwrap_or(0))
+    }
+
+    pub fn get_locks(env: Env, start: u64, limit: u64) -> Result<Vec<AssetLock>, VaultError> {
+        Self::require_initialized(&env)?;
+        let count: u64 = env.storage().instance().get(&StorageKey::LockCount).unwrap_or(0);
+        let mut locks = Vec::new(&env);
+
+        let end = if start + limit > count { count } else { start + limit };
+        for i in start..end {
+            if let Some(lock) = env.storage().instance().get::<StorageKey, AssetLock>(&StorageKey::Lock(i + 1)) {
+                locks.push_back(lock);
+            }
+        }
+
+        Ok(locks)
+    }
+
+    // ============ BATCH LOCK PROPOSALS ============
+    pub fn propose_batch_time_lock(
+        env: Env,
+        proposer: Address,
+        beneficiaries: Vec<(Address, i128)>,
+        token: Address,
+        unlock_time: u64,
+        revocable: bool,
+        description: Symbol,
+    ) -> Result<Vec<u64>, VaultError> {
+        proposer.require_auth();
+        Self::require_initialized(&env)?;
+        Self::require_role(&env, &proposer, Role::Executor)?;
+
+        if beneficiaries.len() as u32 > MAX_BATCH_SIZE {
+            return Err(VaultError::BatchTooLarge);
+        }
+
+        let current_time = env.ledger().timestamp();
+        if unlock_time <= current_time {
+            return Err(VaultError::InvalidTimeRange);
+        }
+
+        let mut total_amount: i128 = 0;
+        for item in beneficiaries.iter() {
+            let (_, amount) = item;
+            if amount <= 0 {
+                return Err(VaultError::InvalidAmount);
+            }
+            total_amount += amount;
+        }
+
+        let token_client = token::Client::new(&env, &token);
+        let vault_balance = token_client.balance(&env.current_contract_address());
+        let already_locked = Self::get_locked_amount(&env, &token);
+        let available = vault_balance - already_locked;
+
+        if available < total_amount {
+            return Err(VaultError::InsufficientUnlockedBalance);
+        }
+
+        Self::collect_fee(&env, &proposer)?;
+
+        let mut proposal_ids = Vec::new(&env);
+        for item in beneficiaries.iter() {
+            let (beneficiary, amount) = item;
+            let proposal_id = Self::create_proposal(
+                &env,
+                proposer.clone(),
+                ProposalType::TimeLock,
+                token.clone(),
+                beneficiary,
+                amount,
+                current_time,
+                unlock_time,
+                0,
+                0,
+                revocable,
+                description.clone(),
+            )?;
+            proposal_ids.push_back(proposal_id);
+        }
+
+        Ok(proposal_ids)
+    }
+
+    pub fn propose_batch_vesting_lock(
+        env: Env,
+        proposer: Address,
+        beneficiaries: Vec<(Address, i128)>,
+        token: Address,
+        start_time: u64,
+        cliff_duration: u64,
+        total_duration: u64,
+        release_intervals: u64,
+        revocable: bool,
+        description: Symbol,
+    ) -> Result<Vec<u64>, VaultError> {
+        proposer.require_auth();
+        Self::require_initialized(&env)?;
+        Self::require_role(&env, &proposer, Role::Executor)?;
+
+        if beneficiaries.len() as u32 > MAX_BATCH_SIZE {
+            return Err(VaultError::BatchTooLarge);
+        }
+
+        let current_time = env.ledger().timestamp();
+        let actual_start = if start_time > current_time { start_time } else { current_time };
+        let cliff_time = actual_start + cliff_duration;
+        let end_time = actual_start + total_duration;
+
+        if end_time <= actual_start {
+            return Err(VaultError::InvalidTimeRange);
+        }
+
+        let mut total_amount: i128 = 0;
+        for item in beneficiaries.iter() {
+            let (_, amount) = item;
+            if amount <= 0 {
+                return Err(VaultError::InvalidAmount);
+            }
+            total_amount += amount;
+        }
+
+        let token_client = token::Client::new(&env, &token);
+        let vault_balance = token_client.balance(&env.current_contract_address());
+        let already_locked = Self::get_locked_amount(&env, &token);
+        let available = vault_balance - already_locked;
+
+        if available < total_amount {
+            return Err(VaultError::InsufficientUnlockedBalance);
+        }
+
+        Self::collect_fee(&env, &proposer)?;
+
+        let mut proposal_ids = Vec::new(&env);
+        for item in beneficiaries.iter() {
+            let (beneficiary, amount) = item;
+            let proposal_id = Self::create_proposal(
+                &env,
+                proposer.clone(),
+                ProposalType::VestingLock,
+                token.clone(),
+                beneficiary,
+                amount,
+                actual_start,
+                end_time,
+                cliff_time,
+                release_intervals,
+                revocable,
+                description.clone(),
+            )?;
+            proposal_ids.push_back(proposal_id);
+        }
+
+        Ok(proposal_ids)
+    }
+
+    // ============ PROPOSALS ============
+    
+    fn create_proposal(
+        env: &Env,
+        proposer: Address,
+        proposal_type: ProposalType,
+        token: Address,
+        recipient: Address,
+        amount: i128,
+        lock_start_time: u64,
+        lock_end_time: u64,
+        lock_cliff_time: u64,
+        lock_release_intervals: u64,
+        lock_revocable: bool,
+        lock_description: Symbol,
+    ) -> Result<u64, VaultError> {
+        let count: u64 = env.storage().instance().get(&StorageKey::ProposalCount).unwrap_or(0);
+        let new_id = count + 1;
+
+        let mut approvals = Vec::new(env);
+        approvals.push_back(proposer.clone());
+
+        let proposal = Proposal {
+            id: new_id,
+            proposal_type,
+            proposer,
+            token,
+            recipient,
+            amount,
+            status: ProposalStatus::Pending,
+            approvals,
+            cancel_approvals: Vec::new(env),
+            created_at: env.ledger().timestamp(),
+            lock_start_time,
+            lock_end_time,
+            lock_cliff_time,
+            lock_release_intervals,
+            lock_revocable,
+            lock_description,
+        };
+
+        env.storage().instance().set(&StorageKey::Proposal(new_id), &proposal);
+        env.storage().instance().set(&StorageKey::ProposalCount, &new_id);
+
+        Ok(new_id)
+    }
+
+    pub fn propose(
+        env: Env,
+        proposer: Address,
+        token: Address,
+        recipient: Address,
+        amount: i128,
+    ) -> Result<u64, VaultError> {
+        proposer.require_auth();
+        Self::require_initialized(&env)?;
+        Self::require_role(&env, &proposer, Role::Executor)?;
+
+        if amount <= 0 {
+            return Err(VaultError::InvalidAmount);
+        }
+
+        let token_client = token::Client::new(&env, &token);
+        let vault_balance = token_client.balance(&env.current_contract_address());
+        let locked = Self::get_locked_amount(&env, &token);
+        let available = vault_balance - locked;
+
+        if available < amount {
+            return Err(VaultError::InsufficientUnlockedBalance);
+        }
+
+        Self::collect_fee(&env, &proposer)?;
+
+        Self::create_proposal(
+            &env,
+            proposer,
+            ProposalType::Transfer,
+            token,
+            recipient,
+            amount,
+            0, 0, 0, 0, false,
+            Symbol::new(&env, ""),
+        )
+    }
+
+    pub fn propose_time_lock(
+        env: Env,
+        proposer: Address,
+        beneficiary: Address,
+        token: Address,
+        amount: i128,
+        unlock_time: u64,
+        revocable: bool,
+        description: Symbol,
+    ) -> Result<u64, VaultError> {
+        proposer.require_auth();
+        Self::require_initialized(&env)?;
+        Self::require_role(&env, &proposer, Role::Executor)?;
+
+        if amount <= 0 {
+            return Err(VaultError::InvalidAmount);
+        }
+
+        let current_time = env.ledger().timestamp();
+        if unlock_time <= current_time {
+            return Err(VaultError::InvalidTimeRange);
+        }
+
+        let token_client = token::Client::new(&env, &token);
+        let vault_balance = token_client.balance(&env.current_contract_address());
+        let already_locked = Self::get_locked_amount(&env, &token);
+        let available = vault_balance - already_locked;
+
+        if available < amount {
+            return Err(VaultError::InsufficientUnlockedBalance);
+        }
+
+        Self::collect_fee(&env, &proposer)?;
+
+        Self::create_proposal(
+            &env,
+            proposer,
+            ProposalType::TimeLock,
+            token,
+            beneficiary,
+            amount,
+            current_time,
+            unlock_time,
+            0,
+            0,
+            revocable,
+            description,
+        )
+    }
+
+    pub fn propose_vesting_lock(
+        env: Env,
+        proposer: Address,
+        beneficiary: Address,
+        token: Address,
+        amount: i128,
+        start_time: u64,
+        cliff_duration: u64,
+        total_duration: u64,
+        release_intervals: u64,
+        revocable: bool,
+        description: Symbol,
+    ) -> Result<u64, VaultError> {
+        proposer.require_auth();
+        Self::require_initialized(&env)?;
+        Self::require_role(&env, &proposer, Role::Executor)?;
+
+        if amount <= 0 {
+            return Err(VaultError::InvalidAmount);
+        }
+
+        let current_time = env.ledger().timestamp();
+        let actual_start = if start_time > current_time { start_time } else { current_time };
+        let cliff_time = actual_start + cliff_duration;
+        let end_time = actual_start + total_duration;
+
+        if end_time <= actual_start {
+            return Err(VaultError::InvalidTimeRange);
+        }
+
+        let token_client = token::Client::new(&env, &token);
+        let vault_balance = token_client.balance(&env.current_contract_address());
+        let already_locked = Self::get_locked_amount(&env, &token);
+        let available = vault_balance - already_locked;
+
+        if available < amount {
+            return Err(VaultError::InsufficientUnlockedBalance);
+        }
+
+        Self::collect_fee(&env, &proposer)?;
+
+        Self::create_proposal(
+            &env,
+            proposer,
+            ProposalType::VestingLock,
+            token,
+            beneficiary,
+            amount,
+            actual_start,
+            end_time,
+            cliff_time,
+            release_intervals,
+            revocable,
+            description,
+        )
+    }
+
+    pub fn approve(env: Env, signer: Address, proposal_id: u64) -> Result<(), VaultError> {
+        signer.require_auth();
+        Self::require_initialized(&env)?;
+        Self::require_role(&env, &signer, Role::Executor)?;
+
+        let mut proposal: Proposal = env.storage().instance()
+            .get(&StorageKey::Proposal(proposal_id))
+            .ok_or(VaultError::ProposalNotFound)?;
+
+        if proposal.status != ProposalStatus::Pending {
+            return Err(VaultError::AlreadyExecuted);
+        }
+
+        if proposal.approvals.contains(&signer) {
+            return Err(VaultError::AlreadyApproved);
+        }
+
+        Self::collect_fee(&env, &signer)?;
+
+        proposal.approvals.push_back(signer);
+
+        let config: VaultConfig = env.storage().instance().get(&StorageKey::Config).unwrap();
+        if proposal.approvals.len() >= config.threshold as u32 {
+            proposal.status = ProposalStatus::Approved;
+        }
+
+        env.storage().instance().set(&StorageKey::Proposal(proposal_id), &proposal);
+        Ok(())
+    }
+
+    pub fn execute(env: Env, executor: Address, proposal_id: u64) -> Result<u64, VaultError> {
+        executor.require_auth();
+        Self::require_initialized(&env)?;
+        Self::require_role(&env, &executor, Role::Executor)?;
+
+        let mut proposal: Proposal = env.storage().instance()
+            .get(&StorageKey::Proposal(proposal_id))
+            .ok_or(VaultError::ProposalNotFound)?;
+
+        if proposal.status == ProposalStatus::Executed {
+            return Err(VaultError::AlreadyExecuted);
+        }
+
+        if proposal.status == ProposalStatus::Rejected {
+            return Err(VaultError::AlreadyRejected);
+        }
+
+        let config: VaultConfig = env.storage().instance().get(&StorageKey::Config).unwrap();
+        if proposal.approvals.len() < config.threshold as u32 {
+            return Err(VaultError::NotEnoughApprovals);
+        }
+
+        Self::collect_fee(&env, &executor)?;
+
+        // Execute based on proposal type
+        let result = match proposal.proposal_type {
+            ProposalType::Transfer => {
+                let token_client = token::Client::new(&env, &proposal.token);
+                let vault_balance = token_client.balance(&env.current_contract_address());
+                let locked = Self::get_locked_amount(&env, &proposal.token);
+                let available = vault_balance - locked;
+
+                if available < proposal.amount {
+                    return Err(VaultError::InsufficientUnlockedBalance);
+                }
+
+                token_client.transfer(&env.current_contract_address(), &proposal.recipient, &proposal.amount);
+                0u64
+            }
+            ProposalType::TimeLock => {
+                let token_client = token::Client::new(&env, &proposal.token);
+                let vault_balance = token_client.balance(&env.current_contract_address());
+                let locked = Self::get_locked_amount(&env, &proposal.token);
+                let available = vault_balance - locked;
+
+                if available < proposal.amount {
+                    return Err(VaultError::InsufficientUnlockedBalance);
+                }
+
+                Self::create_time_lock_internal(
+                    &env,
+                    proposal.proposer.clone(),
+                    proposal.recipient.clone(),
+                    proposal.token.clone(),
+                    proposal.amount,
+                    proposal.lock_end_time,
+                    proposal.lock_revocable,
+                    proposal.lock_description.clone(),
+                )?
+            }
+            ProposalType::VestingLock => {
+                let token_client = token::Client::new(&env, &proposal.token);
+                let vault_balance = token_client.balance(&env.current_contract_address());
+                let locked = Self::get_locked_amount(&env, &proposal.token);
+                let available = vault_balance - locked;
+
+                if available < proposal.amount {
+                    return Err(VaultError::InsufficientUnlockedBalance);
+                }
+
+                Self::create_vesting_lock_internal(
+                    &env,
+                    proposal.proposer.clone(),
+                    proposal.recipient.clone(),
+                    proposal.token.clone(),
+                    proposal.amount,
+                    proposal.lock_start_time,
+                    proposal.lock_cliff_time,
+                    proposal.lock_end_time,
+                    proposal.lock_release_intervals,
+                    proposal.lock_revocable,
+                    proposal.lock_description.clone(),
+                )?
+            }
+            ProposalType::AddSigner => {
+                let role = match proposal.amount {
+                    0 => Role::SuperAdmin,
+                    1 => Role::Admin,
+                    _ => Role::Executor,
+                };
+                Self::execute_add_signer(&env, proposal.recipient.clone(), role)?;
+                0u64
+            }
+            ProposalType::RemoveSigner => {
+                Self::execute_remove_signer(&env, proposal.recipient.clone())?;
+                0u64
+            }
+            ProposalType::SetRole => {
+                let new_role = match proposal.amount {
+                    0 => Role::SuperAdmin,
+                    1 => Role::Admin,
+                    _ => Role::Executor,
+                };
+                Self::execute_set_role(&env, proposal.recipient.clone(), new_role)?;
+                0u64
+            }
+            ProposalType::SetThreshold => {
+                Self::execute_set_threshold(&env, proposal.amount as u32)?;
+                0u64
+            }
+        };
+
+        proposal.status = ProposalStatus::Executed;
+        env.storage().instance().set(&StorageKey::Proposal(proposal_id), &proposal);
+        
+        Ok(result)
+    }
+
+    // ============ CANCEL PROPOSAL ============
+    pub fn request_cancel(env: Env, requester: Address, proposal_id: u64) -> Result<(), VaultError> {
+        requester.require_auth();
+        Self::require_initialized(&env)?;
+        Self::require_role(&env, &requester, Role::Executor)?;
+
+        let mut proposal: Proposal = env.storage().instance()
+            .get(&StorageKey::Proposal(proposal_id))
+            .ok_or(VaultError::ProposalNotFound)?;
+
+        if proposal.status == ProposalStatus::Executed {
+            return Err(VaultError::AlreadyExecuted);
+        }
+        if proposal.status == ProposalStatus::Rejected {
+            return Err(VaultError::AlreadyRejected);
+        }
+
+        if proposal.cancel_approvals.contains(&requester) {
+            return Err(VaultError::AlreadyApproved);
+        }
+
+        Self::collect_fee(&env, &requester)?;
+
+        proposal.cancel_approvals.push_back(requester);
+
+        let config: VaultConfig = env.storage().instance().get(&StorageKey::Config).unwrap();
+        if proposal.cancel_approvals.len() >= config.threshold as u32 {
+            proposal.status = ProposalStatus::Rejected;
+        }
+
+        env.storage().instance().set(&StorageKey::Proposal(proposal_id), &proposal);
+        Ok(())
+    }
+
+    pub fn approve_cancel(env: Env, signer: Address, proposal_id: u64) -> Result<(), VaultError> {
+        signer.require_auth();
+        Self::require_initialized(&env)?;
+        Self::require_role(&env, &signer, Role::Executor)?;
+
+        let mut proposal: Proposal = env.storage().instance()
+            .get(&StorageKey::Proposal(proposal_id))
+            .ok_or(VaultError::ProposalNotFound)?;
+
+        if proposal.status == ProposalStatus::Executed {
+            return Err(VaultError::AlreadyExecuted);
+        }
+        if proposal.status == ProposalStatus::Rejected {
+            return Err(VaultError::AlreadyRejected);
+        }
+
+        if proposal.cancel_approvals.is_empty() {
+            return Err(VaultError::NoCancelRequest);
+        }
+
+        if proposal.cancel_approvals.contains(&signer) {
+            return Err(VaultError::AlreadyApproved);
+        }
+
+        Self::collect_fee(&env, &signer)?;
+
+        proposal.cancel_approvals.push_back(signer);
+
+        let config: VaultConfig = env.storage().instance().get(&StorageKey::Config).unwrap();
+        if proposal.cancel_approvals.len() >= config.threshold as u32 {
+            proposal.status = ProposalStatus::Rejected;
+        }
+
+        env.storage().instance().set(&StorageKey::Proposal(proposal_id), &proposal);
+        Ok(())
+    }
+
+    // ============ VIEW FUNCTIONS ============
+    pub fn get_config(env: Env) -> Result<VaultConfig, VaultError> {
+        Self::require_initialized(&env)?;
+        Ok(env.storage().instance().get(&StorageKey::Config).unwrap())
+    }
+
+    pub fn get_signers(env: Env) -> Result<Vec<Address>, VaultError> {
+        Self::require_initialized(&env)?;
+        Ok(env.storage().instance().get(&StorageKey::Signers).unwrap())
+    }
+
+    pub fn get_proposal(env: Env, proposal_id: u64) -> Result<Proposal, VaultError> {
+        Self::require_initialized(&env)?;
+        env.storage().instance()
+            .get(&StorageKey::Proposal(proposal_id))
+            .ok_or(VaultError::ProposalNotFound)
+    }
+
+    pub fn get_proposal_count(env: Env) -> Result<u64, VaultError> {
+        Self::require_initialized(&env)?;
+        Ok(env.storage().instance().get(&StorageKey::ProposalCount).unwrap_or(0))
+    }
+
+    pub fn get_vault_address(env: Env) -> Address {
+        env.current_contract_address()
+    }
+
+    pub fn get_available_balance(env: Env, token: Address) -> Result<i128, VaultError> {
+        Self::require_initialized(&env)?;
+        let token_client = token::Client::new(&env, &token);
+        let total = token_client.balance(&env.current_contract_address());
+        let locked = Self::get_locked_amount(&env, &token);
+        Ok(total - locked)
+    }
+
+    pub fn has_beneficiary(env: Env, address: Address) -> bool {
+        if !env.storage().instance().has(&StorageKey::Initialized) {
+            return false;
+        }
+        
+        let lock_count: u64 = env.storage().instance()
+            .get(&StorageKey::LockCount)
+            .unwrap_or(0);
+        
+        for i in 1..=lock_count {
+            if let Some(lock) = env.storage().instance().get::<StorageKey, AssetLock>(&StorageKey::Lock(i)) {
+                if lock.beneficiary == address && 
+                   (lock.status == LockStatus::Active || lock.status == LockStatus::PartiallyReleased) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+}
