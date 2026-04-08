@@ -12,7 +12,7 @@ declare global {
   }
 }
 
-export const NETWORK = (process.env.REACT_APP_NETWORK as 'testnet' | 'mainnet') || 'testnet';
+export const NETWORK = (import.meta.env.REACT_APP_NETWORK as 'testnet' | 'mainnet') || 'testnet';
 
 // Fallback config
 const FALLBACK = {
