@@ -299,8 +299,8 @@ Stellar Development Foundation. "Soroban Smart Contracts." https://soroban.stell
 Buterin, V. "A Formal Specification of Multi-Signature Wallets."
 Gnosis Safe. "Multi-Signature Wallet Design Patterns."
 Appendix A: Contract Addresses (Testnet)
-Factory Contract: CAVDNF42BIRIK2XMTM2ESHB42G7RI6UEQUKZA3VBJ3ZSZKZ7SWDWLB5B
-Vault WASM Hash: ea1cc5a126a2f11d09ddb6b15ba4a13e53614de288c770d8cd98c62aa89131d2
+Factory Contract: CCNGOW6UCZKELBAR377HDHWAJJLKD6SJHUFCDT4UM6M2AYPSOEBYLDVA
+Vault WASM Hash: f434965dafa094f90a27a09065562da9fe5aeb00f8208da1665bb4ebebe475ec
 
 
 © 2026 Orion Safe. All rights reserved.
