@@ -4,6 +4,7 @@ import { ActiveView } from './types';
 import { Admin } from './components/views/Admin';
 import { getFactoryConfig } from './services/factoryService';
 import { initConfig } from './config';
+import { supabase } from './lib/supabase';
 // Components
 import { LandingPage } from './components/landing/LandingPage';
 import { Sidebar } from './components/layout/Sidebar';
@@ -21,18 +22,18 @@ import { DepositModal } from './components/modals/DepositModal';
 import CreateVaultModal from './components/CreateVaultModal';
 import { XIcon } from './components/icons';
 import { saveCustomToken, getCustomTokens, CustomToken } from './services/tokensService';
-import { getVaultsByOwner, getVaultsBySigner, getVaultInfo, VaultInfo, isVaultOwner, isBeneficiary } from './services/factoryService';
+import { getVaultsByOwner, getVaultsBySigner, getVaultInfo, VaultInfo, isBeneficiary } from './services/factoryService';
 import { TrustlineModal } from './components/modals/TrustlineModal';
 import { AddTokenModal } from './components/modals/AddTokenModal';
 import ConnectWalletModal from './components/modals/ConnectWalletModal';
 import PublicVaultView from './components/views/PublicVaultView';
 import ClaimPage from './components/views/ClaimPage';
- 
+
 function App() {
   const vault = useStellarVault();
   const [isFactoryAdmin, setIsFactoryAdmin] = useState(false);
   const [configReady, setConfigReady] = useState(false);
- 
+
   // UI state
   const [activeView, setActiveView] = useState<ActiveView>('dashboard');
   const [showNewTxModal, setShowNewTxModal] = useState(false);
@@ -41,10 +42,10 @@ function App() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [copied, setCopied] = useState(false);
   const [hasBeneficiaryLocks, setHasBeneficiaryLocks] = useState(false);
- 
+
   // Custom tokens (using tokensService)
   const [customTokens, setCustomTokens] = useState<CustomToken[]>(getCustomTokens);
- 
+
   const handleAddToken = (token: {address: string; symbol: string; name: string; decimals: number}) => {
     const customToken: CustomToken = {
       ...token,
@@ -56,29 +57,33 @@ function App() {
       vault.loadVaultData();
     }
   };
- 
+
   const [showClaimPage, setShowClaimPage] = useState(false);
- 
+  const [claimVaultAddress, setClaimVaultAddress] = useState<string | null>(null);
+
   // Vault selection state
   const [userVaults, setUserVaults] = useState<VaultInfo[]>([]);
   const [loadingVaults, setLoadingVaults] = useState(false);
   const [showTrustlineModal, setShowTrustlineModal] = useState(false);
   const [showAddTokenModal, setShowAddTokenModal] = useState(false);
   const [showConnectWalletModal, setShowConnectWalletModal] = useState(false);
- 
+
   // Token preselection for modals
   const [selectedTokenForTx, setSelectedTokenForTx] = useState<string | null>(null);
   const [selectedTokenForLock, setSelectedTokenForLock] = useState<string | null>(null);
   
   // Public view
   const [publicViewVault, setPublicViewVault] = useState<string | null>(null);
- 
+
+  // URL vault parameter
+  const [urlVaultParam, setUrlVaultParam] = useState<string | null>(null);
+
   const copyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
- 
+
   // Initialize dynamic config on mount
   useEffect(() => {
     initConfig().then((cfg) => {
@@ -86,31 +91,58 @@ function App() {
       setConfigReady(true);
     });
   }, []);
- 
-  // Check for public view URL parameters on mount
+
+  // Check for URL parameters on mount
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const vaultParam = params.get('vault');
     const viewParam = params.get('view');
     
-    if (vaultParam && viewParam === 'public') {
-      setPublicViewVault(vaultParam);
+    if (vaultParam) {
+      setUrlVaultParam(vaultParam);
+      
+      if (viewParam === 'public') {
+        setPublicViewVault(vaultParam);
+      } else if (viewParam === 'claim') {
+        setClaimVaultAddress(vaultParam);
+        setShowClaimPage(true);
+      }
     }
   }, []);
- 
+
   // Load user's vaults when connected AND config is ready
   useEffect(() => {
     if (vault.connected && vault.publicKey && configReady) {
       loadUserVaults();
     }
   }, [vault.connected, vault.publicKey, configReady]);
- 
+
+  // Check if user is beneficiary on a specific vault
+  const isBeneficiaryOnVault = async (vaultAddress: string, userAddress: string): Promise<boolean> => {
+    if (!supabase) return false;
+    try {
+      const { data, error } = await supabase
+        .from('locks')
+        .select('id')
+        .eq('vault_address', vaultAddress)
+        .eq('beneficiary_address', userAddress)
+        .eq('is_active', true)
+        .limit(1);
+      
+      if (error) return false;
+      return (data?.length || 0) > 0;
+    } catch {
+      return false;
+    }
+  };
+
   const loadUserVaults = async () => {
     if (!vault.publicKey) return;
     
     console.log('=== loadUserVaults ===');
     console.log('publicKey:', vault.publicKey);
     setLoadingVaults(true);
+    
     try {
       const vaultInfos: VaultInfo[] = [];
       const loadedAddresses = new Set<string>();
@@ -147,11 +179,38 @@ function App() {
       
       console.log('Total vaults loaded:', vaultInfos.length, vaultInfos);
       setUserVaults(vaultInfos);
+      
+      // Check if user has any beneficiary locks (for sidebar button)
       const isBeneficiaryUser = await isBeneficiary(vault.publicKey);
       setHasBeneficiaryLocks(isBeneficiaryUser);
+
+      // Handle URL vault parameter
+      if (urlVaultParam) {
+        const isSignerOnUrlVault = vaultInfos.some(v => v.vault_address === urlVaultParam);
+        
+        if (isSignerOnUrlVault) {
+          // User is signer on this vault - select it and show dashboard
+          console.log('User is signer on URL vault, selecting:', urlVaultParam);
+          vault.selectVault(urlVaultParam);
+        } else {
+          // User is NOT a signer - check if they're a beneficiary on this vault
+          console.log('User is not signer on URL vault, checking beneficiary status...');
+          const isBeneficiaryOnUrlVault = await isBeneficiaryOnVault(urlVaultParam, vault.publicKey);
+          
+          if (isBeneficiaryOnUrlVault) {
+            console.log('User is beneficiary on URL vault, showing claim page');
+            setClaimVaultAddress(urlVaultParam);
+            setShowClaimPage(true);
+            return; // Exit early - show claim page
+          } else {
+            console.log('User has no access to URL vault');
+            // Could show an error message here
+          }
+        }
+      }
       
-      // Auto-select first vault if available and none selected
-      if (vaultInfos.length > 0 && !vault.vaultAddress) {
+      // Auto-select first vault if available and none selected (and not showing claim page)
+      if (vaultInfos.length > 0 && !vault.vaultAddress && !showClaimPage) {
         const savedVaultAddress = localStorage.getItem('selectedVaultAddress');
         const vaultToSelect = savedVaultAddress && vaultInfos.some(v => v.vault_address === savedVaultAddress)
           ? savedVaultAddress
@@ -160,8 +219,8 @@ function App() {
         vault.selectVault(vaultToSelect);
       }
       
-      // If no vaults, check if beneficiary
-      if (vaultInfos.length === 0) {
+      // If no vaults and no URL param, check if beneficiary globally
+      if (vaultInfos.length === 0 && !urlVaultParam) {
         console.log('No vaults found, checking if beneficiary...');
         console.log('Checking beneficiary for publicKey:', vault.publicKey);
         const hasBeneficiaryLocks = await isBeneficiary(vault.publicKey);
@@ -179,7 +238,7 @@ function App() {
       setLoadingVaults(false);
     }
   };
- 
+
   useEffect(() => {
     const checkFactoryAdmin = async () => {
       if (!vault.publicKey) {
@@ -195,44 +254,37 @@ function App() {
     };
     checkFactoryAdmin();
   }, [vault.publicKey]);
- 
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const vaultParam = params.get('vault');
-    const viewParam = params.get('view');
-    
-    if (viewParam === 'claim') {
-      setShowClaimPage(true);
-    } else if (vaultParam && viewParam === 'public') {
-      setPublicViewVault(vaultParam);
-    }
-  }, []);
- 
+
   const handleVaultCreated = async (vaultAddress: string) => {
     await loadUserVaults();
     vault.selectVault(vaultAddress);
     setActiveView('dashboard');
     setShowCreateVaultModal(false);
   };
- 
+
   const handleWalletConnect = (publicKey: string, walletId: string) => {
     vault.connect(publicKey, walletId);
     setShowConnectWalletModal(false);
   };
- 
+
+  const handleCloseClaimPage = () => {
+    setShowClaimPage(false);
+    setClaimVaultAddress(null);
+    window.history.pushState({}, '', window.location.pathname);
+  };
+
+  // CLAIM PAGE - Show if user is beneficiary
   if (showClaimPage) {
     return (
       <ClaimPage
-        onClose={() => {
-          setShowClaimPage(false);
-          window.history.pushState({}, '', window.location.pathname);
-        }}
+        onClose={handleCloseClaimPage}
         initialPublicKey={vault.publicKey}
         initialWalletId={vault.walletId}
+        vaultAddress={claimVaultAddress}
       />
     );
   }
- 
+
   // PUBLIC VIEW - Check this FIRST before wallet connection
   if (publicViewVault) {
     return (
@@ -245,7 +297,7 @@ function App() {
       />
     );
   }
- 
+
   // Landing page for non-connected users
   if (!vault.connected) {
     return (
@@ -264,11 +316,11 @@ function App() {
       </>
     );
   }
- 
+
   // Get current vault info for display
   const hasVaults = userVaults.length > 0;
   const hasSelectedVault = !!vault.vaultAddress;
- 
+
   // Main app
   return (
     <div className="min-h-screen bg-[#060a12] text-white flex">
@@ -294,7 +346,7 @@ function App() {
         hasBeneficiaryLocks={hasBeneficiaryLocks}
         onShowClaimPage={() => setShowClaimPage(true)}
       />
- 
+
       <main className="flex-1 flex flex-col min-h-screen overflow-hidden pt-14 lg:pt-0">
         <Header
           activeView={activeView}
@@ -307,7 +359,7 @@ function App() {
           onDeposit={() => setShowDepositModal(true)}
           onNewTransaction={() => setShowNewTxModal(true)}
         />
- 
+
         <div className="flex-1 overflow-auto p-6">
           {/* Toast Messages */}
           {(vault.error || vault.success) && (
@@ -320,7 +372,7 @@ function App() {
               </button>
             </div>
           )}
- 
+
           {/* No Vault State - Show Create Vault CTA */}
           {!hasSelectedVault && !loadingVaults && (
             <div className="flex flex-col items-center justify-center min-h-[60vh]">
@@ -345,7 +397,7 @@ function App() {
                   </svg>
                   Create Your First Vault
                 </button>
- 
+
                 {hasVaults && (
                   <p className="text-sm text-gray-500 mt-6">
                     Or select an existing vault from the sidebar
@@ -354,7 +406,7 @@ function App() {
               </div>
             </div>
           )}
- 
+
           {/* Loading State */}
           {loadingVaults && !hasSelectedVault && (
             <div className="flex flex-col items-center justify-center min-h-[60vh]">
@@ -362,7 +414,7 @@ function App() {
               <p className="text-gray-400">Loading your vaults...</p>
             </div>
           )}
- 
+
           {/* Vault Selected - Show Normal Views */}
           {hasSelectedVault && (
             <>
@@ -509,14 +561,14 @@ function App() {
               )}
             </>
           )}
- 
+
           {/* Contacts view is available even without vault */}
           {!hasSelectedVault && activeView === 'contacts' && (
             <Contacts onCopy={copyToClipboard} />
           )}
         </div>
       </main>
- 
+
       {/* Modals */}
       {showNewTxModal && (
         <NewTransactionModal
@@ -536,7 +588,7 @@ function App() {
           proposals={vault.proposals}
         />
       )}
- 
+
       {showDepositModal && (
         <DepositModal
           vaultAddress={vault.vaultAddress}
@@ -549,7 +601,7 @@ function App() {
           }}
         />
       )}
- 
+
       {showTrustlineModal && (
         <TrustlineModal
           isOpen={showTrustlineModal}
@@ -561,7 +613,7 @@ function App() {
           }}
         />
       )}
- 
+
       {showAddTokenModal && (
         <AddTokenModal
           isOpen={showAddTokenModal}
@@ -569,7 +621,7 @@ function App() {
           onAddToken={handleAddToken}
         />
       )}
- 
+
       {showCreateVaultModal && (
         <CreateVaultModal
           isOpen={showCreateVaultModal}
@@ -578,7 +630,7 @@ function App() {
           onVaultCreated={handleVaultCreated}
         />
       )}
- 
+
       {/* Copy Toast */}
       {copied && (
         <div className="fixed bottom-4 right-4 bg-gray-800 text-white px-4 py-2 rounded-lg shadow-lg z-50">
@@ -588,5 +640,5 @@ function App() {
     </div>
   );
 }
- 
+
 export default App;

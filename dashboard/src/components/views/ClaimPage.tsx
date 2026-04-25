@@ -27,12 +27,14 @@ interface ClaimPageProps {
   onClose: () => void;
   initialPublicKey?: string | null;
   initialWalletId?: string | null;
+  vaultAddress?: string | null;  // Optional: filter locks to a specific vault
 }
 
 const ClaimPage: React.FC<ClaimPageProps> = ({ 
     onClose, 
     initialPublicKey = null, 
-    initialWalletId = null 
+    initialWalletId = null,
+    vaultAddress: filterVaultAddress = null
 }) => {
   const [publicKey, setPublicKey] = useState<string | null>(null);
   const [walletId, setWalletId] = useState<string | null>(null);
@@ -62,7 +64,7 @@ const ClaimPage: React.FC<ClaimPageProps> = ({
     if (publicKey) {
       loadMyLocks();
     }
-  }, [publicKey]);
+  }, [publicKey, filterVaultAddress]);
 
   useEffect(() => {
     if (initialPublicKey && !publicKey) {
@@ -79,26 +81,24 @@ const ClaimPage: React.FC<ClaimPageProps> = ({
     setMyLocks([]);
     
     try {
-      const allVaults = await getAllVaults();
-      setTotalVaults(allVaults.length);
-      
       const foundLocks: Lock[] = [];
       
-      for (let i = 0; i < allVaults.length; i++) {
-        const vaultInfo = allVaults[i];  // This is VaultInfo object
-        const vaultAddress = vaultInfo.vault_address;  // Extract the address string
-        setScannedVaults(i + 1);
-
+      // If filtering to a specific vault, only load that one
+      if (filterVaultAddress) {
+        setTotalVaults(1);
+        setScannedVaults(0);
+        
         try {
-          const locks = await stellar.getLocks(vaultAddress);
-
+          const vaultInfo = await getVaultInfo(filterVaultAddress);
+          const locks = await stellar.getLocks(filterVaultAddress);
+          
           for (const lock of locks) {
             if (lock.beneficiary === publicKey) {
               foundLocks.push({
                 ...lock,
                 id: Number(lock.id),
-                vaultAddress,
-                vaultName: vaultInfo.name || 'Unknown Vault',  // Use vaultInfo directly
+                vaultAddress: filterVaultAddress,
+                vaultName: vaultInfo?.name || 'Unknown Vault',
                 total_amount: BigInt(lock.total_amount),
                 released_amount: BigInt(lock.released_amount),
                 start_time: Number(lock.start_time),
@@ -108,8 +108,42 @@ const ClaimPage: React.FC<ClaimPageProps> = ({
               });
             }
           }
+          setScannedVaults(1);
         } catch (err) {
-          console.error(`Failed to load locks from vault ${vaultAddress}:`, err);
+          console.error(`Failed to load locks from vault ${filterVaultAddress}:`, err);
+        }
+      } else {
+        // Load locks from all vaults
+        const allVaults = await getAllVaults();
+        setTotalVaults(allVaults.length);
+        
+        for (let i = 0; i < allVaults.length; i++) {
+          const vaultInfo = allVaults[i];
+          const vaultAddress = vaultInfo.vault_address;
+          setScannedVaults(i + 1);
+
+          try {
+            const locks = await stellar.getLocks(vaultAddress);
+
+            for (const lock of locks) {
+              if (lock.beneficiary === publicKey) {
+                foundLocks.push({
+                  ...lock,
+                  id: Number(lock.id),
+                  vaultAddress,
+                  vaultName: vaultInfo.name || 'Unknown Vault',
+                  total_amount: BigInt(lock.total_amount),
+                  released_amount: BigInt(lock.released_amount),
+                  start_time: Number(lock.start_time),
+                  end_time: Number(lock.end_time),
+                  cliff_time: Number(lock.cliff_time),
+                  release_intervals: Number(lock.release_intervals),
+                });
+              }
+            }
+          } catch (err) {
+            console.error(`Failed to load locks from vault ${vaultAddress}:`, err);
+          }
         }
       }
       
@@ -284,7 +318,12 @@ const ClaimPage: React.FC<ClaimPageProps> = ({
               </button>
               <div>
                 <h1 className="text-xl font-bold text-white">Claim Your Tokens</h1>
-                <p className="text-gray-400 text-sm">View and claim locks assigned to you</p>
+                <p className="text-gray-400 text-sm">
+                  {filterVaultAddress 
+                    ? `Viewing locks from vault ${truncateAddress(filterVaultAddress)}`
+                    : 'View and claim locks assigned to you'
+                  }
+                </p>
               </div>
             </div>
             
@@ -338,7 +377,8 @@ const ClaimPage: React.FC<ClaimPageProps> = ({
             </div>
             <h2 className="text-2xl font-bold text-white mb-3">Connect Your Wallet</h2>
             <p className="text-gray-400 mb-8 max-w-md mx-auto">
-              Connect your wallet to see all time locks and vesting schedules assigned to you across all Stellar Vaults.
+              Connect your wallet to see all time locks and vesting schedules assigned to you
+              {filterVaultAddress ? ' from this vault.' : ' across all Stellar Vaults.'}
             </p>
             <button
               onClick={() => setShowConnectModal(true)}
@@ -353,8 +393,12 @@ const ClaimPage: React.FC<ClaimPageProps> = ({
         {publicKey && loading && (
           <div className="text-center py-20">
             <div className="w-16 h-16 border-4 border-purple-500 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
-            <p className="text-gray-400">Scanning vaults for your locks...</p>
-            <p className="text-gray-500 text-sm mt-2">Checked {scannedVaults} of {totalVaults} vaults</p>
+            <p className="text-gray-400">
+              {filterVaultAddress ? 'Loading locks from vault...' : 'Scanning vaults for your locks...'}
+            </p>
+            {!filterVaultAddress && (
+              <p className="text-gray-500 text-sm mt-2">Checked {scannedVaults} of {totalVaults} vaults</p>
+            )}
           </div>
         )}
 
@@ -480,7 +524,12 @@ const ClaimPage: React.FC<ClaimPageProps> = ({
                   </svg>
                 </div>
                 <p className="text-gray-400 mb-2">No locks found</p>
-                <p className="text-gray-500 text-sm">You don't have any time locks or vesting schedules assigned to you.</p>
+                <p className="text-gray-500 text-sm">
+                  {filterVaultAddress 
+                    ? 'You don\'t have any locks assigned to you in this vault.'
+                    : 'You don\'t have any time locks or vesting schedules assigned to you.'
+                  }
+                </p>
                 <button
                   onClick={loadMyLocks}
                   className="mt-4 px-4 py-2 bg-purple-600/20 text-purple-400 rounded-lg hover:bg-purple-600/30 transition-colors"
