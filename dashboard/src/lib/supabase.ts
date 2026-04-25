@@ -1,15 +1,18 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string | undefined;
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
+const supabaseUrl = process.env.REACT_APP_SUPABASE_URL;
+const supabaseAnonKey = process.env.REACT_APP_SUPABASE_ANON_KEY;
+
+console.log('SUPABASE INIT:', { url: supabaseUrl, keyLength: supabaseAnonKey?.length });
 
 export const supabase: SupabaseClient | null =
   supabaseUrl && supabaseAnonKey
     ? createClient(supabaseUrl, supabaseAnonKey)
     : null;
 
-if (!supabase) {console.warn('Supabase not configured. Check VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY.');}
-
+if (!supabase) {
+  console.warn('Supabase not configured. Check REACT_APP_SUPABASE_URL and REACT_APP_SUPABASE_ANON_KEY.');
+}
 // Types
 export interface ContractDeployment {
   id: string;
