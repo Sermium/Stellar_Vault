@@ -707,34 +707,69 @@ const Vesting: React.FC<VestingProps> = ({
           {/* Modal */}
           <div className="relative w-full max-w-6xl max-h-[90vh] bg-gray-900 rounded-2xl border border-cyan-900/30 shadow-2xl overflow-hidden flex flex-col mx-4">
             {/* Header */}
-            <div className="mb-6">
-              {/* Title Row */}
+            <div className="p-6 border-b border-gray-800">
               <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
                 <div className="min-w-0">
-                  <h1 className="text-xl sm:text-2xl font-bold text-white truncate">Vesting Schedules</h1>
-                  <p className="text-gray-400 text-sm mt-1">Manage token vesting with gradual release periods</p>
+                  <h2 className="text-xl sm:text-2xl font-bold text-white">📈 Bulk Create Vesting</h2>
+                  <p className="text-gray-400 text-sm mt-1">Create multiple vesting schedules at once (max {MAX_BATCH_SIZE} per batch)</p>
                 </div>
                 
-                {/* Buttons - Stack on mobile */}
-                {(userRole === 'Admin' || userRole === 'Executor' || userRole === 'SuperAdmin') && (
-                  <div className="flex flex-col sm:flex-row gap-2 sm:gap-3 w-full sm:w-auto">
-                    <button
-                      onClick={() => setShowBulkModal(true)}
-                      className="w-full sm:w-auto flex items-center justify-center gap-2 px-4 py-2.5 bg-gray-700 hover:bg-gray-600 text-white rounded-lg transition-colors"
-                    >
-                      <Upload className="w-4 h-4" />
-                      <span>Bulk Create</span>
-                    </button>
-                    <button
-                      onClick={() => setShowCreateModal(true)}
-                      className="w-full sm:w-auto flex items-center justify-center gap-2 px-4 py-2.5 bg-gradient-to-r from-cyan-500 to-cyan-600 hover:from-cyan-600 hover:to-cyan-700 text-white rounded-lg transition-colors"
-                    >
-                      <Plus className="w-4 h-4" />
-                      <span>Create Vesting</span>
-                    </button>
-                  </div>
+                {/* CSV Buttons */}
+                <div className="flex flex-col sm:flex-row gap-2 sm:gap-3 w-full sm:w-auto">
+                  <button
+                    onClick={handleExportTemplate}
+                    disabled={bulkProcessing}
+                    className="w-full sm:w-auto flex items-center justify-center gap-2 px-4 py-2.5 bg-gray-700 hover:bg-gray-600 text-white rounded-lg transition-colors disabled:opacity-50"
+                  >
+                    <Download className="w-4 h-4" />
+                    <span>Download Template</span>
+                  </button>
+                  <label className="w-full sm:w-auto flex items-center justify-center gap-2 px-4 py-2.5 bg-cyan-600/20 hover:bg-cyan-600/30 border border-cyan-500/30 text-cyan-400 rounded-lg transition-colors cursor-pointer">
+                    <Upload className="w-4 h-4" />
+                    <span>Import CSV</span>
+                    <input
+                      type="file"
+                      accept=".csv"
+                      onChange={handleImportCSV}
+                      disabled={bulkProcessing}
+                      className="hidden"
+                    />
+                  </label>
+                  <button
+                    onClick={() => { setShowBulkModal(false); resetBulkModal(); }}
+                    disabled={bulkProcessing}
+                    className="w-full sm:w-auto flex items-center justify-center px-3 py-2.5 text-gray-400 hover:text-white hover:bg-gray-800 rounded-lg transition-colors disabled:opacity-50"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+              </div>
+
+              {/* Stats */}
+              <div className="flex flex-wrap gap-4 mt-4 text-sm">
+                <span className="text-gray-400">
+                  Total: <span className="text-white font-medium">{bulkEntries.length}</span>
+                </span>
+                <span className="text-gray-400">
+                  Pending: <span className="text-yellow-400 font-medium">{bulkPendingCount}</span>
+                </span>
+                <span className="text-gray-400">
+                  Success: <span className="text-green-400 font-medium">{bulkSuccessCount}</span>
+                </span>
+                {bulkErrorCount > 0 && (
+                  <span className="text-gray-400">
+                    Errors: <span className="text-red-400 font-medium">{bulkErrorCount}</span>
+                  </span>
                 )}
               </div>
+
+              {/* Batch Limit Warning */}
+              {bulkPendingCount >= MAX_BATCH_SIZE && (
+                <div className="mt-4 p-3 bg-yellow-500/10 border border-yellow-500/30 rounded-lg flex items-center gap-2 text-yellow-400 text-sm">
+                  <AlertCircle className="w-4 h-4 flex-shrink-0" />
+                  <span>Maximum batch size reached ({MAX_BATCH_SIZE} schedules). Process these before adding more.</span>
+                </div>
+              )}
             </div>
 
             {/* Entries List */}
