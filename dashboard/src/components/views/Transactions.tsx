@@ -482,42 +482,44 @@ export const Transactions: React.FC<TransactionsProps> = ({
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex justify-between items-center">
+      <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4">
         <div>
-          <h2 className="text-2xl font-bold text-white">Transactions</h2>
-          <p className="text-gray-400">Manage proposals and view history</p>
+          <h2 className="text-xl sm:text-2xl font-bold text-white">Transactions</h2>
+          <p className="text-gray-400 text-sm">Manage proposals and view history</p>
         </div>
-        <div className="flex gap-3">
+        <div className="flex flex-wrap gap-2 sm:gap-3">
           {onRefreshProposals && (
             <button
               onClick={handleRefreshProposals}
               disabled={refreshingProposals}
-              className="px-4 py-2 bg-gray-700 text-white rounded-lg hover:bg-gray-600 transition flex items-center gap-2"
+              className="flex-1 sm:flex-none px-3 sm:px-4 py-2 bg-gray-700 text-white rounded-lg hover:bg-gray-600 transition text-sm flex items-center justify-center gap-2"
             >
               <svg className={`w-4 h-4 ${refreshingProposals ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
               </svg>
-              Refresh
+              <span className="hidden sm:inline">Refresh</span>
             </button>
           )}
           {isSigner && (userRole === 'Admin' || userRole === 'Executor' || userRole === 'SuperAdmin') && onCreateTransfer && (
             <button
               onClick={() => setShowBulkModal(true)}
-              className="px-4 py-2 bg-blue-600/20 hover:bg-blue-600/30 border border-blue-500/30 rounded-lg text-blue-400 transition flex items-center gap-2"
+              className="flex-1 sm:flex-none px-3 sm:px-4 py-2 bg-blue-600/20 hover:bg-blue-600/30 border border-blue-500/30 rounded-lg text-blue-400 transition text-sm flex items-center justify-center gap-2"
             >
               <Upload className="w-4 h-4" />
-              Bulk Transfer
+              <span className="hidden sm:inline">Bulk Transfer</span>
+              <span className="sm:hidden">Bulk</span>
             </button>
           )}
           {isSigner && (userRole === 'Admin' || userRole === 'Executor' || userRole === 'SuperAdmin') && (
             <button
               onClick={onNewTransaction}
-              className="px-4 py-2 bg-gradient-to-r from-cyan-500 to-blue-600 text-white rounded-lg hover:from-cyan-400 hover:to-blue-500 transition flex items-center gap-2"
+              className="flex-1 sm:flex-none px-3 sm:px-4 py-2 bg-gradient-to-r from-cyan-500 to-blue-600 text-white rounded-lg hover:from-cyan-400 hover:to-blue-500 transition text-sm flex items-center justify-center gap-2"
             >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
               </svg>
-              New Transaction
+              <span className="hidden sm:inline">New Transaction</span>
+              <span className="sm:hidden">New</span>
             </button>
           )}
         </div>

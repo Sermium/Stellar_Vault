@@ -592,63 +592,41 @@ const Locks: React.FC<LocksProps> = ({
           {/* Modal */}
           <div className="relative w-full max-w-5xl max-h-[90vh] bg-gray-900 rounded-2xl border border-blue-900/30 shadow-2xl overflow-hidden flex flex-col mx-4">
             {/* Header */}
-            <div className="p-6 border-b border-gray-800">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h2 className="text-xl font-bold text-white">
-                    📦 Bulk Time Lock Creation
-                  </h2>
-                  <p className="text-sm text-gray-400 mt-1">
-                    Create multiple time locks in batch - great for team allocations, airdrops, etc.
-                  </p>
-                </div>
-                <button
-                  onClick={() => { setShowBulkModal(false); resetBulkModal(); }}
-                  disabled={bulkProcessing}
-                  className="p-2 hover:bg-gray-800 rounded-lg transition-colors text-gray-400 hover:text-white disabled:opacity-50"
-                >
-                  <X className="w-5 h-5" />
-                </button>
+            <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4 mb-6">
+              <div>
+                <h1 className="text-xl sm:text-2xl font-bold text-white">⏰ Time Locks</h1>
+                <p className="text-gray-400 text-sm mt-1">Lock assets until a specific date</p>
               </div>
-
-              {/* Import/Export buttons */}
-              <div className="flex items-center gap-3 mt-4">
-                <label className="flex items-center gap-2 px-4 py-2 bg-blue-600/20 hover:bg-blue-600/30 rounded-lg cursor-pointer transition-colors text-blue-400 text-sm border border-blue-500/30">
-                  <Upload className="w-4 h-4" />
-                  <span>Import CSV</span>
-                  <input
-                    type="file"
-                    accept=".csv"
-                    onChange={handleImportCSV}
-                    className="hidden"
-                    disabled={bulkProcessing}
-                  />
-                </label>
-                <button
-                  onClick={handleExportTemplate}
-                  className="flex items-center gap-2 px-4 py-2 bg-gray-800 hover:bg-gray-700 rounded-lg transition-colors text-gray-300 text-sm border border-gray-700"
-                  disabled={bulkProcessing}
+              <div className="flex flex-wrap gap-2 sm:gap-3">
+                <button 
+                  onClick={onRefresh} 
+                  className="flex-1 sm:flex-none px-3 sm:px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg text-white transition-colors text-sm flex items-center justify-center gap-2"
                 >
-                  <Download className="w-4 h-4" />
-                  <span>Download Template</span>
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                  </svg>
+                  <span className="hidden sm:inline">Refresh</span>
                 </button>
-                
-                {/* Stats */}
-                <div className="ml-auto flex items-center gap-4 text-sm">
-                  <span className="text-gray-400">
-                    Total: <span className="text-white font-semibold">{bulkEntries.length}</span>
-                  </span>
-                  {bulkSuccessCount > 0 && (
-                    <span className="text-green-400">
-                      Success: <span className="font-semibold">{bulkSuccessCount}</span>
-                    </span>
-                  )}
-                  {bulkErrorCount > 0 && (
-                    <span className="text-red-400">
-                      Failed: <span className="font-semibold">{bulkErrorCount}</span>
-                    </span>
-                  )}
-                </div>
+                {isAdmin && !isPublicView && (
+                  <>
+                    <button 
+                      onClick={() => setShowBulkModal(true)} 
+                      className="flex-1 sm:flex-none px-3 sm:px-4 py-2 bg-blue-600/20 hover:bg-blue-600/30 border border-blue-500/30 rounded-lg text-blue-400 transition-colors text-sm flex items-center justify-center gap-2"
+                    >
+                      <Upload className="w-4 h-4" />
+                      <span className="hidden sm:inline">Bulk Create</span>
+                      <span className="sm:hidden">Bulk</span>
+                    </button>
+                    <button 
+                      onClick={() => setShowCreateModal(true)} 
+                      className="flex-1 sm:flex-none px-3 sm:px-4 py-2 bg-purple-600 hover:bg-purple-500 rounded-lg text-white transition-colors text-sm flex items-center justify-center gap-2"
+                    >
+                      <Plus className="w-4 h-4" />
+                      <span className="hidden sm:inline">Create Time Lock</span>
+                      <span className="sm:hidden">Create</span>
+                    </button>
+                  </>
+                )}
               </div>
             </div>
 
