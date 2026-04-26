@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useStellarVault } from './hooks/useStellarVault';
 import { ActiveView } from './types';
+import Docs from './components/views/Docs';
 import { Admin } from './components/views/Admin';
 import { getFactoryConfig } from './services/factoryService';
 import { initConfig } from './config';
@@ -557,6 +558,7 @@ function App() {
                       preselectedToken={selectedTokenForLock}
                     />
                   )}
+                  {activeView === 'docs' && <Docs />}
                 </>
               )}
             </>

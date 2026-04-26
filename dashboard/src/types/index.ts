@@ -54,4 +54,4 @@ export interface TokenInfo {
   issuer?: string;
 }
 
-export type ActiveView = 'dashboard' | 'assets' | 'transactions' | 'members' | 'contacts' | 'admin' | 'settings' | 'locks' | 'vesting' | 'claim';
+export type ActiveView = 'dashboard' | 'assets' | 'transactions' | 'members' | 'contacts' | 'admin' | 'settings' | 'locks' | 'vesting' | 'claim' | 'docs';
