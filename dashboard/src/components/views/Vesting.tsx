@@ -608,20 +608,33 @@ const Vesting: React.FC<VestingProps> = ({
 
   return (
     <div className="p-6">
-      <div className="flex justify-between items-center mb-6">
-        <div><h1 className="text-2xl font-bold text-white">📈 Vesting Schedules</h1><p className="text-gray-400 mt-1">Token vesting with cliff periods and gradual release</p></div>
-        <div className="flex gap-3">
-          <button onClick={onRefresh} className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg text-white transition-colors">Refresh</button>
+      <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4 mb-6">
+        <div>
+          <h1 className="text-xl sm:text-2xl font-bold text-white">📈 Vesting Schedules</h1>
+          <p className="text-gray-400 text-sm sm:text-base mt-1">Token vesting with cliff periods and gradual release</p>
+        </div>
+        <div className="flex flex-col sm:flex-row gap-2 sm:gap-3 w-full sm:w-auto">
+          <button 
+            onClick={onRefresh} 
+            className="w-full sm:w-auto px-4 py-2.5 bg-gray-700 hover:bg-gray-600 rounded-lg text-white transition-colors"
+          >
+            Refresh
+          </button>
           {isAdmin && !isPublicView && (
             <>
               <button 
                 onClick={() => setShowBulkModal(true)} 
-                className="px-4 py-2 bg-cyan-600/20 hover:bg-cyan-600/30 border border-cyan-500/30 rounded-lg text-cyan-400 transition-colors flex items-center gap-2"
+                className="w-full sm:w-auto px-4 py-2.5 bg-cyan-600/20 hover:bg-cyan-600/30 border border-cyan-500/30 rounded-lg text-cyan-400 transition-colors flex items-center justify-center gap-2"
               >
                 <Upload className="w-4 h-4" />
                 Bulk Create
               </button>
-              <button onClick={() => setShowCreateModal(true)} className="px-4 py-2 bg-cyan-600 hover:bg-cyan-500 rounded-lg text-white transition-colors">+ Create Vesting</button>
+              <button 
+                onClick={() => setShowCreateModal(true)} 
+                className="w-full sm:w-auto px-4 py-2.5 bg-cyan-600 hover:bg-cyan-500 rounded-lg text-white transition-colors"
+              >
+                + Create Vesting
+              </button>
             </>
           )}
         </div>
