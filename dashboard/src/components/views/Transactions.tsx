@@ -4,7 +4,7 @@ import { formatAmount, truncateAddress } from '../../lib/utils';
 import { getAccountPayments, PaymentRecord } from '../../services/transactionHistoryService';
 import { getContacts, Contact } from '../../services/contactsService';
 import { SUPPORTED_TOKENS, NATIVE_TOKEN } from '../../config';
-import { Plus, Trash2, Upload, Download, AlertCircle, CheckCircle, Loader2, X, Copy, AlertTriangle } from 'lucide-react';
+import { Plus, Trash2, Upload, Download, AlertCircle, CheckCircle, Loader2, X, Copy, AlertTriangle, RefreshCw } from 'lucide-react';
 
 interface TransactionsProps {
   vaultAddress: string | null;
@@ -482,46 +482,45 @@ export const Transactions: React.FC<TransactionsProps> = ({
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4">
-        <div>
-          <h2 className="text-xl sm:text-2xl font-bold text-white">Transactions</h2>
-          <p className="text-gray-400 text-sm">Manage proposals and view history</p>
-        </div>
-        <div className="flex flex-wrap gap-2 sm:gap-3">
-          {onRefreshProposals && (
+      <div className="mb-6">
+        {/* Title Row */}
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+          <div className="min-w-0">
+            <h1 className="text-xl sm:text-2xl font-bold text-white truncate">Transactions</h1>
+            <p className="text-gray-400 text-sm mt-1">View and manage vault proposals and transfers</p>
+          </div>
+          
+          {/* Buttons - Stack on mobile */}
+          <div className="flex flex-col sm:flex-row gap-2 sm:gap-3 w-full sm:w-auto">
             <button
-              onClick={handleRefreshProposals}
+              onClick={onRefreshProposals}
               disabled={refreshingProposals}
-              className="flex-1 sm:flex-none px-3 sm:px-4 py-2 bg-gray-700 text-white rounded-lg hover:bg-gray-600 transition text-sm flex items-center justify-center gap-2"
+              className="w-full sm:w-auto flex items-center justify-center gap-2 px-4 py-2.5 bg-gray-700 hover:bg-gray-600 disabled:opacity-50 text-white rounded-lg transition-colors"
             >
-              <svg className={`w-4 h-4 ${refreshingProposals ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-              </svg>
-              <span className="hidden sm:inline">Refresh</span>
+              <RefreshCw className={`w-4 h-4 ${refreshingProposals ? 'animate-spin' : ''}`} />
+              <span>Refresh</span>
             </button>
-          )}
-          {isSigner && (userRole === 'Admin' || userRole === 'Executor' || userRole === 'SuperAdmin') && onCreateTransfer && (
-            <button
-              onClick={() => setShowBulkModal(true)}
-              className="flex-1 sm:flex-none px-3 sm:px-4 py-2 bg-blue-600/20 hover:bg-blue-600/30 border border-blue-500/30 rounded-lg text-blue-400 transition text-sm flex items-center justify-center gap-2"
-            >
-              <Upload className="w-4 h-4" />
-              <span className="hidden sm:inline">Bulk Transfer</span>
-              <span className="sm:hidden">Bulk</span>
-            </button>
-          )}
-          {isSigner && (userRole === 'Admin' || userRole === 'Executor' || userRole === 'SuperAdmin') && (
-            <button
-              onClick={onNewTransaction}
-              className="flex-1 sm:flex-none px-3 sm:px-4 py-2 bg-gradient-to-r from-cyan-500 to-blue-600 text-white rounded-lg hover:from-cyan-400 hover:to-blue-500 transition text-sm flex items-center justify-center gap-2"
-            >
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-              </svg>
-              <span className="hidden sm:inline">New Transaction</span>
-              <span className="sm:hidden">New</span>
-            </button>
-          )}
+            
+            {(userRole === 'Admin' || userRole === 'Executor' || userRole === 'SuperAdmin') && onCreateTransfer && (
+              <button
+                onClick={() => setShowBulkModal(true)}
+                className="w-full sm:w-auto flex items-center justify-center gap-2 px-4 py-2.5 bg-gray-700 hover:bg-gray-600 text-white rounded-lg transition-colors"
+              >
+                <Upload className="w-4 h-4" />
+                <span>Bulk Transfer</span>
+              </button>
+            )}
+            
+            {(userRole === 'Admin' || userRole === 'Executor' || userRole === 'SuperAdmin') && (
+              <button
+                onClick={onNewTransaction}
+                className="w-full sm:w-auto flex items-center justify-center gap-2 px-4 py-2.5 bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700 text-white rounded-lg transition-colors"
+              >
+                <Plus className="w-4 h-4" />
+                <span>New Transaction</span>
+              </button>
+            )}
+          </div>
         </div>
       </div>
 

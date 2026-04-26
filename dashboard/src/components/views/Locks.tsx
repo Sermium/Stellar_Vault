@@ -1,6 +1,6 @@
 ﻿import React, { useState, useEffect } from 'react';
 import { getContacts, Contact } from '../../services/contactsService';
-import { Plus, Trash2, Upload, Download, AlertCircle, CheckCircle, Loader2, X, Copy } from 'lucide-react';
+import { Plus, Trash2, Upload, Download, AlertCircle, CheckCircle, Loader2, X, Copy, RefreshCw } from 'lucide-react';
 
 // Constants for batch limits
 const MAX_BATCH_SIZE = 10;
@@ -592,40 +592,32 @@ const Locks: React.FC<LocksProps> = ({
           {/* Modal */}
           <div className="relative w-full max-w-5xl max-h-[90vh] bg-gray-900 rounded-2xl border border-blue-900/30 shadow-2xl overflow-hidden flex flex-col mx-4">
             {/* Header */}
-            <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4 mb-6">
-              <div>
-                <h1 className="text-xl sm:text-2xl font-bold text-white">⏰ Time Locks</h1>
-                <p className="text-gray-400 text-sm mt-1">Lock assets until a specific date</p>
-              </div>
-              <div className="flex flex-wrap gap-2 sm:gap-3">
-                <button 
-                  onClick={onRefresh} 
-                  className="flex-1 sm:flex-none px-3 sm:px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg text-white transition-colors text-sm flex items-center justify-center gap-2"
-                >
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                  </svg>
-                  <span className="hidden sm:inline">Refresh</span>
-                </button>
-                {isAdmin && !isPublicView && (
-                  <>
-                    <button 
-                      onClick={() => setShowBulkModal(true)} 
-                      className="flex-1 sm:flex-none px-3 sm:px-4 py-2 bg-blue-600/20 hover:bg-blue-600/30 border border-blue-500/30 rounded-lg text-blue-400 transition-colors text-sm flex items-center justify-center gap-2"
+            <div className="mb-6">
+              {/* Title Row */}
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+                <div className="min-w-0">
+                  <h1 className="text-xl sm:text-2xl font-bold text-white truncate">Time Locks</h1>
+                  <p className="text-gray-400 text-sm mt-1">Manage time-locked tokens with scheduled release dates</p>
+                </div>
+                
+                {/* Buttons - Stack on mobile */}
+                {(userRole === 'Admin' || userRole === 'Executor' || userRole === 'SuperAdmin') && (
+                  <div className="flex flex-col sm:flex-row gap-2 sm:gap-3 w-full sm:w-auto">
+                    <button
+                      onClick={() => setShowBulkModal(true)}
+                      className="w-full sm:w-auto flex items-center justify-center gap-2 px-4 py-2.5 bg-gray-700 hover:bg-gray-600 text-white rounded-lg transition-colors"
                     >
                       <Upload className="w-4 h-4" />
-                      <span className="hidden sm:inline">Bulk Create</span>
-                      <span className="sm:hidden">Bulk</span>
+                      <span>Bulk Create</span>
                     </button>
-                    <button 
-                      onClick={() => setShowCreateModal(true)} 
-                      className="flex-1 sm:flex-none px-3 sm:px-4 py-2 bg-purple-600 hover:bg-purple-500 rounded-lg text-white transition-colors text-sm flex items-center justify-center gap-2"
+                    <button
+                      onClick={() => setShowCreateModal(true)}
+                      className="w-full sm:w-auto flex items-center justify-center gap-2 px-4 py-2.5 bg-gradient-to-r from-purple-500 to-purple-600 hover:from-purple-600 hover:to-purple-700 text-white rounded-lg transition-colors"
                     >
                       <Plus className="w-4 h-4" />
-                      <span className="hidden sm:inline">Create Time Lock</span>
-                      <span className="sm:hidden">Create</span>
+                      <span>Create Lock</span>
                     </button>
-                  </>
+                  </div>
                 )}
               </div>
             </div>

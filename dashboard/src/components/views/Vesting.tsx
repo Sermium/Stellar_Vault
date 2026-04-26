@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { getContacts, Contact } from '../../services/contactsService';
-import { Plus, Trash2, Upload, Download, AlertCircle, CheckCircle, Loader2, X, Copy } from 'lucide-react';
+import { Plus, Trash2, Upload, Download, AlertCircle, CheckCircle, Loader2, X, Copy, RefreshCw } from 'lucide-react';
 
 // Constants for batch limits
 const MAX_BATCH_SIZE = 10;
@@ -694,40 +694,32 @@ const Vesting: React.FC<VestingProps> = ({
           {/* Modal */}
           <div className="relative w-full max-w-6xl max-h-[90vh] bg-gray-900 rounded-2xl border border-cyan-900/30 shadow-2xl overflow-hidden flex flex-col mx-4">
             {/* Header */}
-            <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4 mb-6">
-              <div>
-                <h1 className="text-xl sm:text-2xl font-bold text-white">📈 Vesting Schedules</h1>
-                <p className="text-gray-400 text-sm mt-1">Token vesting with cliff periods and gradual release</p>
-              </div>
-              <div className="flex flex-wrap gap-2 sm:gap-3">
-                <button 
-                  onClick={onRefresh} 
-                  className="flex-1 sm:flex-none px-3 sm:px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg text-white transition-colors text-sm flex items-center justify-center gap-2"
-                >
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                  </svg>
-                  <span className="hidden sm:inline">Refresh</span>
-                </button>
-                {isAdmin && !isPublicView && (
-                  <>
-                    <button 
-                      onClick={() => setShowBulkModal(true)} 
-                      className="flex-1 sm:flex-none px-3 sm:px-4 py-2 bg-cyan-600/20 hover:bg-cyan-600/30 border border-cyan-500/30 rounded-lg text-cyan-400 transition-colors text-sm flex items-center justify-center gap-2"
+            <div className="mb-6">
+              {/* Title Row */}
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+                <div className="min-w-0">
+                  <h1 className="text-xl sm:text-2xl font-bold text-white truncate">Vesting Schedules</h1>
+                  <p className="text-gray-400 text-sm mt-1">Manage token vesting with gradual release periods</p>
+                </div>
+                
+                {/* Buttons - Stack on mobile */}
+                {(userRole === 'Admin' || userRole === 'Executor' || userRole === 'SuperAdmin') && (
+                  <div className="flex flex-col sm:flex-row gap-2 sm:gap-3 w-full sm:w-auto">
+                    <button
+                      onClick={() => setShowBulkModal(true)}
+                      className="w-full sm:w-auto flex items-center justify-center gap-2 px-4 py-2.5 bg-gray-700 hover:bg-gray-600 text-white rounded-lg transition-colors"
                     >
                       <Upload className="w-4 h-4" />
-                      <span className="hidden sm:inline">Bulk Create</span>
-                      <span className="sm:hidden">Bulk</span>
+                      <span>Bulk Create</span>
                     </button>
-                    <button 
-                      onClick={() => setShowCreateModal(true)} 
-                      className="flex-1 sm:flex-none px-3 sm:px-4 py-2 bg-cyan-600 hover:bg-cyan-500 rounded-lg text-white transition-colors text-sm flex items-center justify-center gap-2"
+                    <button
+                      onClick={() => setShowCreateModal(true)}
+                      className="w-full sm:w-auto flex items-center justify-center gap-2 px-4 py-2.5 bg-gradient-to-r from-cyan-500 to-cyan-600 hover:from-cyan-600 hover:to-cyan-700 text-white rounded-lg transition-colors"
                     >
                       <Plus className="w-4 h-4" />
-                      <span className="hidden sm:inline">Create Vesting</span>
-                      <span className="sm:hidden">Create</span>
+                      <span>Create Vesting</span>
                     </button>
-                  </>
+                  </div>
                 )}
               </div>
             </div>
