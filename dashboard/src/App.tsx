@@ -485,6 +485,11 @@ function App() {
                       onExecuteCancel={vault.executeCancel}
                       onNewTransaction={() => setShowNewTxModal(true)}
                       onRefreshProposals={() => vault.loadVaultData()}
+                      // Add these two new props for bulk transfers:
+                      onCreateTransfer={async (recipient, token, amount) => {
+                        await vault.propose(token, recipient, amount);
+                      }}
+                      vaultBalance={vault.vaultBalance}
                     />
                   )}
 

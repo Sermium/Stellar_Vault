@@ -1,5 +1,24 @@
 ﻿import React, { useState, useEffect } from 'react';
 import { getContacts, Contact } from '../../services/contactsService';
+import { Plus, Trash2, Upload, Download, AlertCircle, CheckCircle, Loader2, X, Copy } from 'lucide-react';
+
+// Constants for batch limits
+const MAX_BATCH_SIZE = 10;
+const BATCH_DELAY_MS = 3000;
+
+// CSV Example Template for Time Locks
+const CSV_TIMELOCK_EXAMPLE = `# Bulk Time Lock Template - Orion Safe
+# Maximum ${MAX_BATCH_SIZE} locks per batch to avoid network overload
+#
+# Format: beneficiary,amount,token,unlock_date,revocable,description
+# Date format: YYYY-MM-DDTHH:MM (e.g., 2026-12-31T12:00)
+# revocable: true or false
+#
+# Example entries:
+beneficiary,amount,token,unlock_date,revocable,description
+GBXGQJWVLWOYHFLVTKWV5FGHA3LNYY2JQKM7OAJAUEQFU6LPCSEFVXON,1000,CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC,2026-12-31T12:00,true,Team allocation Q4
+GCFONE23AB7Y6C5YZOMKPQHBLRPNXACTTBLCBHWBXM5CUUTP7M4JOZQQ,500,CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC,2027-06-15T00:00,false,Advisor lockup
+GDQP2KPQGKIHYJGXNUIYOMHARUARCA7DJT5FO2FFOOUJ3DCMOPJCXP6V,2500,CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC,2026-09-01T09:00,true,Marketing budget`;
 
 interface Lock {
   id: number | bigint;
@@ -31,6 +50,18 @@ interface Proposal {
   token: string;
   amount: bigint | string;
   status: number | string;
+}
+
+interface BulkLockEntry {
+  id: string;
+  beneficiary: string;
+  amount: string;
+  token: string;
+  unlockDate: string;
+  revocable: boolean;
+  description: string;
+  status: 'pending' | 'processing' | 'success' | 'error';
+  error?: string;
 }
 
 interface LocksProps {
@@ -98,6 +129,7 @@ const Locks: React.FC<LocksProps> = ({
   isPublicView = false,
 }) => {
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [showBulkModal, setShowBulkModal] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showArchived, setShowArchived] = useState(false);
@@ -111,11 +143,23 @@ const Locks: React.FC<LocksProps> = ({
   const [revocable, setRevocable] = useState(true);
   const [description, setDescription] = useState('');
 
+  // Bulk modal state
+  const [bulkEntries, setBulkEntries] = useState<BulkLockEntry[]>([]);
+  const [bulkProcessing, setBulkProcessing] = useState(false);
+  const [bulkCurrentIndex, setBulkCurrentIndex] = useState(0);
+
   const isAdmin = userRole === 'Admin' || userRole === 'SuperAdmin';
   const locks = allLocks.filter(l => getLockTypeString(l.lock_type) === 'TimeLock');
 
-  useEffect(() => { setContacts(getContacts()); }, [showCreateModal]);
+  useEffect(() => { setContacts(getContacts()); }, [showCreateModal, showBulkModal]);
   useEffect(() => { if (preselectedToken) { setSelectedToken(preselectedToken); setShowCreateModal(true); } }, [preselectedToken]);
+
+  // Initialize bulk entries when modal opens
+  useEffect(() => {
+    if (showBulkModal && bulkEntries.length === 0) {
+      addBulkEntry();
+    }
+  }, [showBulkModal]);
 
   const getLockId = (lock: Lock): number => typeof lock.id === 'bigint' ? Number(lock.id) : lock.id;
   const safeBigInt = (value: any): bigint => {
@@ -137,19 +181,15 @@ const Locks: React.FC<LocksProps> = ({
 
   const truncateAddress = (addr: string): string => addr ? addr.slice(0, 6) + '...' + addr.slice(-4) : '';
   
-  // Calculate available balance for a token (total - locked - pending proposals)
   const getAvailableBalance = (tokenAddress: string): bigint => {
     const token = vaultBalance.find(t => t.address === tokenAddress);
     if (!token) return BigInt(0);
     
     const totalBalance = token.balance;
-    
-    // Sum of active locks for this token
     const lockedAmount = allLocks
       .filter(l => l.token === tokenAddress && getStatusString(l.status) === 'Active')
       .reduce((sum, l) => sum + BigInt(l.total_amount || 0) - BigInt(l.released_amount || 0), BigInt(0));
     
-    // Sum of pending proposals for this token
     const pendingAmount = proposals
       .filter(p => p.token === tokenAddress && (Number(p.status) === 0 || Number(p.status) === 1))
       .reduce((sum, p) => sum + BigInt(p.amount || 0), BigInt(0));
@@ -157,6 +197,7 @@ const Locks: React.FC<LocksProps> = ({
     const reserved = lockedAmount + pendingAmount;
     return totalBalance > reserved ? totalBalance - reserved : BigInt(0);
   };
+
   const getTokenSymbol = (tokenAddress: string): string => vaultBalance.find(t => t.address === tokenAddress)?.symbol || truncateAddress(tokenAddress);
   const getTokenDecimals = (tokenAddress: string): number => vaultBalance.find(t => t.address === tokenAddress)?.decimals || 7;
   const getContactName = (address: string): string | null => contacts.find(c => c.address === address)?.name || null;
@@ -231,6 +272,189 @@ const Locks: React.FC<LocksProps> = ({
 
   const resetForm = () => { setBeneficiary(''); setContactSearch(''); setSelectedToken(''); setAmount(''); setUnlockDate(''); setRevocable(true); setDescription(''); setShowContactDropdown(false); };
 
+  // ==================== BULK MODAL FUNCTIONS ====================
+  const generateId = () => Math.random().toString(36).substr(2, 9);
+
+  const addBulkEntry = () => {
+    if (bulkEntries.filter(e => e.status === 'pending').length >= MAX_BATCH_SIZE) {
+      alert(`Maximum ${MAX_BATCH_SIZE} time locks per batch to avoid network overload.`);
+      return;
+    }
+    const newEntry: BulkLockEntry = {
+      id: generateId(),
+      beneficiary: '',
+      amount: '',
+      token: vaultBalance[0]?.address || '',
+      unlockDate: '',
+      revocable: true,
+      description: '',
+      status: 'pending',
+    };
+    setBulkEntries(prev => [...prev, newEntry]);
+  };
+
+  const removeBulkEntry = (id: string) => {
+    if (bulkEntries.length > 1) {
+      setBulkEntries(prev => prev.filter(e => e.id !== id));
+    }
+  };
+
+  const updateBulkEntry = (id: string, field: keyof BulkLockEntry, value: any) => {
+    setBulkEntries(prev => prev.map(e => 
+      e.id === id ? { ...e, [field]: value } : e
+    ));
+  };
+
+  const duplicateBulkEntry = (entry: BulkLockEntry) => {
+    const newEntry: BulkLockEntry = {
+      ...entry,
+      id: generateId(),
+      beneficiary: '',
+      status: 'pending',
+      error: undefined,
+    };
+    setBulkEntries(prev => [...prev, newEntry]);
+  };
+
+  const validateBulkEntry = (entry: BulkLockEntry): string | null => {
+    if (!entry.beneficiary || entry.beneficiary.length !== 56 || !entry.beneficiary.startsWith('G')) {
+      return 'Invalid beneficiary address';
+    }
+    if (!entry.amount || parseFloat(entry.amount) <= 0) {
+      return 'Invalid amount';
+    }
+    if (!entry.token) {
+      return 'Token not selected';
+    }
+    if (!entry.unlockDate) {
+      return 'Unlock date required';
+    }
+    if (new Date(entry.unlockDate).getTime() <= Date.now()) {
+      return 'Unlock date must be in the future';
+    }
+    return null;
+  };
+
+  const handleBulkProcessAll = async () => {
+    // Validate all entries first
+    const validationErrors: { [key: string]: string } = {};
+    bulkEntries.forEach(entry => {
+      const error = validateBulkEntry(entry);
+      if (error) {
+        validationErrors[entry.id] = error;
+      }
+    });
+
+    if (Object.keys(validationErrors).length > 0) {
+      setBulkEntries(prev => prev.map(e => ({
+        ...e,
+        status: validationErrors[e.id] ? 'error' : 'pending',
+        error: validationErrors[e.id],
+      })));
+      return;
+    }
+
+    setBulkProcessing(true);
+
+    for (let i = 0; i < bulkEntries.length; i++) {
+      setBulkCurrentIndex(i);
+      const entry = bulkEntries[i];
+      
+      // Update status to processing
+      setBulkEntries(prev => prev.map(e => 
+        e.id === entry.id ? { ...e, status: 'processing' } : e
+      ));
+
+      try {
+        const unlockTime = Math.floor(new Date(entry.unlockDate).getTime() / 1000);
+        await onCreateTimeLock(
+          entry.beneficiary,
+          entry.token,
+          entry.amount,
+          unlockTime,
+          entry.revocable,
+          entry.description || 'Bulk Time Lock'
+        );
+
+        setBulkEntries(prev => prev.map(e => 
+          e.id === entry.id ? { ...e, status: 'success' } : e
+        ));
+
+        // Small delay between transactions
+        if (i < bulkEntries.length - 1) {
+          await new Promise(resolve => setTimeout(resolve, BATCH_DELAY_MS));
+        }
+      } catch (error: any) {
+        setBulkEntries(prev => prev.map(e => 
+          e.id === entry.id ? { ...e, status: 'error', error: error.message || 'Failed to create proposal' } : e
+        ));
+      }
+    }
+
+    setBulkProcessing(false);
+    onRefresh();
+  };
+
+  const handleImportCSV = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const text = e.target?.result as string;
+      const lines = text.split('\n')
+        .map(line => line.trim())
+        .filter(line => line && !line.startsWith('#')); // Skip empty lines and comments
+      
+      // Skip header row if it looks like a header
+      const dataLines = lines[0]?.toLowerCase().includes('beneficiary') ? lines.slice(1) : lines;
+      
+      if (dataLines.length > MAX_BATCH_SIZE) {
+        alert(`CSV contains ${dataLines.length} entries. Maximum ${MAX_BATCH_SIZE} per batch. Only the first ${MAX_BATCH_SIZE} will be imported.`);
+      }
+
+      const newEntries: BulkLockEntry[] = dataLines.slice(0, MAX_BATCH_SIZE).map(line => {
+        const columns = line.split(',').map(col => col.trim());
+        return {
+          id: generateId(),
+          beneficiary: columns[0] || '',
+          amount: columns[1] || '',
+          token: columns[2] || vaultBalance[0]?.address || '',
+          unlockDate: columns[3] || '',
+          revocable: columns[4]?.toLowerCase() !== 'false',
+          description: columns[5] || '',
+          status: 'pending' as const,
+        };
+      });
+
+      setBulkEntries(newEntries);
+    };
+    reader.readAsText(file);
+    event.target.value = '';
+  };
+
+  const handleExportTemplate = () => {
+    const blob = new Blob([CSV_TIMELOCK_EXAMPLE], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'bulk_timelock_template.csv';
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const resetBulkModal = () => {
+    setBulkEntries([]);
+    setBulkProcessing(false);
+    setBulkCurrentIndex(0);
+  };
+
+  const bulkPendingCount = bulkEntries.filter(e => e.status === 'pending').length;
+  const bulkSuccessCount = bulkEntries.filter(e => e.status === 'success').length;
+  const bulkErrorCount = bulkEntries.filter(e => e.status === 'error').length;
+
+  // ==================== END BULK MODAL FUNCTIONS ====================
+
   const myClaimableLocks = locks.filter(l => l.beneficiary === publicKey && !isAutoArchived(l));
   const activeLocks = locks.filter(l => ['Active', 'PartiallyReleased'].includes(getStatusString(l.status)) && l.beneficiary !== publicKey);
   const archivedLocks = locks.filter(l => isAutoArchived(l));
@@ -298,7 +522,18 @@ const Locks: React.FC<LocksProps> = ({
         <div><h1 className="text-2xl font-bold text-white">⏰ Time Locks</h1><p className="text-gray-400 mt-1">Lock assets until a specific date</p></div>
         <div className="flex gap-3">
           <button onClick={onRefresh} className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg text-white transition-colors">Refresh</button>
-          {isAdmin && !isPublicView && <button onClick={() => setShowCreateModal(true)} className="px-4 py-2 bg-purple-600 hover:bg-purple-500 rounded-lg text-white transition-colors">+ Create Time Lock</button>}
+          {isAdmin && !isPublicView && (
+            <>
+              <button 
+                onClick={() => setShowBulkModal(true)} 
+                className="px-4 py-2 bg-blue-600/20 hover:bg-blue-600/30 border border-blue-500/30 rounded-lg text-blue-400 transition-colors flex items-center gap-2"
+              >
+                <Upload className="w-4 h-4" />
+                Bulk Create
+              </button>
+              <button onClick={() => setShowCreateModal(true)} className="px-4 py-2 bg-purple-600 hover:bg-purple-500 rounded-lg text-white transition-colors">+ Create Time Lock</button>
+            </>
+          )}
         </div>
       </div>
 
@@ -319,6 +554,7 @@ const Locks: React.FC<LocksProps> = ({
 
       {archivedLocks.length > 0 && <div className="mt-8"><button onClick={() => setShowArchived(!showArchived)} className="w-full flex items-center justify-between p-4 bg-gray-800/50 hover:bg-gray-800 rounded-lg transition-colors"><div className="flex items-center gap-2"><span className="text-xl">📦</span><span className="text-lg font-semibold text-gray-300">Archived</span><span className="px-2 py-0.5 bg-gray-700 text-gray-400 rounded text-sm">{archivedLocks.length}</span></div><svg className={'w-5 h-5 text-gray-400 transition-transform ' + (showArchived ? 'rotate-180' : '')} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg></button>{showArchived && <div className="mt-4 space-y-4">{archivedLocks.map(lock => <LockCard key={getLockId(lock)} lock={lock} isArchived={true} />)}</div>}</div>}
 
+      {/* Single Create Modal */}
       {showCreateModal && (
         <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
           <div className="bg-gray-900 rounded-xl p-6 max-w-lg w-full max-h-[90vh] overflow-y-auto">
@@ -339,6 +575,300 @@ const Locks: React.FC<LocksProps> = ({
               <p className="text-xs text-gray-500 p-2 bg-gray-800/50 rounded">⚠️ A 10 XLM fee will be charged for creating the lock.</p>
               {error && <p className="text-red-400 text-sm">{error}</p>}
               <button onClick={handleCreateLock} disabled={loading || !selectedToken || !beneficiary || !amount || !unlockDate} className="w-full py-3 bg-purple-600 hover:bg-purple-500 disabled:bg-gray-700 disabled:cursor-not-allowed rounded-lg text-white font-semibold transition-colors">{loading ? 'Creating...' : 'Create Time Lock'}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Bulk Create Modal */}
+      {showBulkModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
+          {/* Backdrop */}
+          <div 
+            className="absolute inset-0 bg-black/70 backdrop-blur-sm"
+            onClick={!bulkProcessing ? () => { setShowBulkModal(false); resetBulkModal(); } : undefined}
+          />
+          
+          {/* Modal */}
+          <div className="relative w-full max-w-5xl max-h-[90vh] bg-gray-900 rounded-2xl border border-blue-900/30 shadow-2xl overflow-hidden flex flex-col mx-4">
+            {/* Header */}
+            <div className="p-6 border-b border-gray-800">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h2 className="text-xl font-bold text-white">
+                    📦 Bulk Time Lock Creation
+                  </h2>
+                  <p className="text-sm text-gray-400 mt-1">
+                    Create multiple time locks in batch - great for team allocations, airdrops, etc.
+                  </p>
+                </div>
+                <button
+                  onClick={() => { setShowBulkModal(false); resetBulkModal(); }}
+                  disabled={bulkProcessing}
+                  className="p-2 hover:bg-gray-800 rounded-lg transition-colors text-gray-400 hover:text-white disabled:opacity-50"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              {/* Import/Export buttons */}
+              <div className="flex items-center gap-3 mt-4">
+                <label className="flex items-center gap-2 px-4 py-2 bg-blue-600/20 hover:bg-blue-600/30 rounded-lg cursor-pointer transition-colors text-blue-400 text-sm border border-blue-500/30">
+                  <Upload className="w-4 h-4" />
+                  <span>Import CSV</span>
+                  <input
+                    type="file"
+                    accept=".csv"
+                    onChange={handleImportCSV}
+                    className="hidden"
+                    disabled={bulkProcessing}
+                  />
+                </label>
+                <button
+                  onClick={handleExportTemplate}
+                  className="flex items-center gap-2 px-4 py-2 bg-gray-800 hover:bg-gray-700 rounded-lg transition-colors text-gray-300 text-sm border border-gray-700"
+                  disabled={bulkProcessing}
+                >
+                  <Download className="w-4 h-4" />
+                  <span>Download Template</span>
+                </button>
+                
+                {/* Stats */}
+                <div className="ml-auto flex items-center gap-4 text-sm">
+                  <span className="text-gray-400">
+                    Total: <span className="text-white font-semibold">{bulkEntries.length}</span>
+                  </span>
+                  {bulkSuccessCount > 0 && (
+                    <span className="text-green-400">
+                      Success: <span className="font-semibold">{bulkSuccessCount}</span>
+                    </span>
+                  )}
+                  {bulkErrorCount > 0 && (
+                    <span className="text-red-400">
+                      Failed: <span className="font-semibold">{bulkErrorCount}</span>
+                    </span>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* Entries List */}
+            <div className="flex-1 overflow-y-auto p-6 space-y-4">
+              {bulkEntries.map((entry, index) => (
+                <div
+                  key={entry.id}
+                  className={`p-4 rounded-xl border transition-all ${
+                    entry.status === 'success'
+                      ? 'bg-green-900/20 border-green-500/30'
+                      : entry.status === 'error'
+                      ? 'bg-red-900/20 border-red-500/30'
+                      : entry.status === 'processing'
+                      ? 'bg-blue-900/20 border-blue-500/30 animate-pulse'
+                      : 'bg-gray-800/50 border-gray-700'
+                  }`}
+                >
+                  <div className="flex items-start gap-4">
+                    {/* Index & Status */}
+                    <div className="flex flex-col items-center gap-2">
+                      <span className="w-8 h-8 flex items-center justify-center rounded-full bg-gray-700 text-gray-300 text-sm font-semibold">
+                        {index + 1}
+                      </span>
+                      {entry.status === 'processing' && (
+                        <Loader2 className="w-5 h-5 text-blue-400 animate-spin" />
+                      )}
+                      {entry.status === 'success' && (
+                        <CheckCircle className="w-5 h-5 text-green-400" />
+                      )}
+                      {entry.status === 'error' && (
+                        <AlertCircle className="w-5 h-5 text-red-400" />
+                      )}
+                    </div>
+
+                    {/* Form Fields */}
+                    <div className="flex-1 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                      {/* Beneficiary */}
+                      <div className="lg:col-span-2">
+                        <label className="block text-xs text-gray-400 mb-1">Beneficiary Address</label>
+                        <div className="relative">
+                          <input
+                            type="text"
+                            value={entry.beneficiary}
+                            onChange={(e) => updateBulkEntry(entry.id, 'beneficiary', e.target.value)}
+                            placeholder="GXXXX..."
+                            disabled={entry.status !== 'pending' || bulkProcessing}
+                            className="w-full px-4 py-2 bg-gray-900/50 border border-gray-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-purple-500 disabled:opacity-50 font-mono text-sm"
+                            list={`contacts-${entry.id}`}
+                          />
+                          <datalist id={`contacts-${entry.id}`}>
+                            {contacts.map(c => (
+                              <option key={c.address} value={c.address}>{c.name}</option>
+                            ))}
+                          </datalist>
+                          {getContactName(entry.beneficiary) && (
+                            <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-purple-400">
+                              {getContactName(entry.beneficiary)}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Amount */}
+                      <div>
+                        <label className="block text-xs text-gray-400 mb-1">Amount</label>
+                        <input
+                          type="number"
+                          value={entry.amount}
+                          onChange={(e) => updateBulkEntry(entry.id, 'amount', e.target.value)}
+                          placeholder="0.00"
+                          step="any"
+                          min="0"
+                          disabled={entry.status !== 'pending' || bulkProcessing}
+                          className="w-full px-4 py-2 bg-gray-900/50 border border-gray-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-purple-500 disabled:opacity-50"
+                        />
+                      </div>
+
+                      {/* Token */}
+                      <div>
+                        <label className="block text-xs text-gray-400 mb-1">Token</label>
+                        <select
+                          value={entry.token}
+                          onChange={(e) => updateBulkEntry(entry.id, 'token', e.target.value)}
+                          disabled={entry.status !== 'pending' || bulkProcessing}
+                          className="w-full px-4 py-2 bg-gray-900/50 border border-gray-700 rounded-lg text-white focus:outline-none focus:border-purple-500 disabled:opacity-50"
+                        >
+                          {vaultBalance.map(token => (
+                            <option key={token.address} value={token.address}>
+                              {token.symbol} ({formatAmount(token.balance, token.decimals)})
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+
+                      {/* Unlock Date */}
+                      <div>
+                        <label className="block text-xs text-gray-400 mb-1">Unlock Date</label>
+                        <input
+                          type="datetime-local"
+                          value={entry.unlockDate}
+                          onChange={(e) => updateBulkEntry(entry.id, 'unlockDate', e.target.value)}
+                          min={new Date().toISOString().slice(0,16)}
+                          disabled={entry.status !== 'pending' || bulkProcessing}
+                          className="w-full px-4 py-2 bg-gray-900/50 border border-gray-700 rounded-lg text-white focus:outline-none focus:border-purple-500 disabled:opacity-50"
+                        />
+                      </div>
+
+                      {/* Description */}
+                      <div>
+                        <label className="block text-xs text-gray-400 mb-1">Description</label>
+                        <input
+                          type="text"
+                          value={entry.description}
+                          onChange={(e) => updateBulkEntry(entry.id, 'description', e.target.value)}
+                          placeholder="Optional"
+                          maxLength={32}
+                          disabled={entry.status !== 'pending' || bulkProcessing}
+                          className="w-full px-4 py-2 bg-gray-900/50 border border-gray-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-purple-500 disabled:opacity-50"
+                        />
+                      </div>
+
+                      {/* Revocable */}
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="checkbox"
+                          id={`revocable-${entry.id}`}
+                          checked={entry.revocable}
+                          onChange={(e) => updateBulkEntry(entry.id, 'revocable', e.target.checked)}
+                          disabled={entry.status !== 'pending' || bulkProcessing}
+                          className="w-4 h-4 rounded border-gray-700 bg-gray-900/50 text-purple-500 focus:ring-purple-500/50"
+                        />
+                        <label htmlFor={`revocable-${entry.id}`} className="text-sm text-gray-400">
+                          Revocable
+                        </label>
+                      </div>
+                    </div>
+
+                    {/* Actions */}
+                    <div className="flex flex-col gap-2">
+                      <button
+                        onClick={() => duplicateBulkEntry(entry)}
+                        disabled={entry.status !== 'pending' || bulkProcessing}
+                        className="p-2 hover:bg-gray-700 rounded-lg transition-colors text-blue-400 disabled:opacity-50"
+                        title="Duplicate"
+                      >
+                        <Copy className="w-4 h-4" />
+                      </button>
+                      <button
+                        onClick={() => removeBulkEntry(entry.id)}
+                        disabled={bulkEntries.length <= 1 || entry.status !== 'pending' || bulkProcessing}
+                        className="p-2 hover:bg-red-900/30 rounded-lg transition-colors text-red-400 disabled:opacity-50"
+                        title="Remove"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Error Message */}
+                  {entry.error && (
+                    <div className="mt-3 flex items-center gap-2 text-sm text-red-400">
+                      <AlertCircle className="w-4 h-4" />
+                      <span>{entry.error}</span>
+                    </div>
+                  )}
+                </div>
+              ))}
+
+              {/* Add Entry Button */}
+              <button
+                onClick={addBulkEntry}
+                disabled={bulkProcessing}
+                className="w-full p-4 border-2 border-dashed border-gray-700 rounded-xl text-gray-400 hover:bg-gray-800/50 hover:border-purple-500/50 hover:text-purple-400 transition-all flex items-center justify-center gap-2 disabled:opacity-50"
+              >
+                <Plus className="w-5 h-5" />
+                <span>Add Time Lock</span>
+              </button>
+            </div>
+
+            {/* Footer */}
+            <div className="p-6 border-t border-gray-800 bg-gray-900/50">
+              <div className="flex items-center justify-between">
+                <div className="text-sm text-gray-400">
+                  {bulkProcessing ? (
+                    <span className="flex items-center gap-2">
+                      <Loader2 className="w-4 h-4 animate-spin text-blue-400" />
+                      Processing {bulkCurrentIndex + 1} of {bulkEntries.length}...
+                    </span>
+                  ) : (
+                    <span>
+                      {bulkPendingCount} lock{bulkPendingCount !== 1 ? 's' : ''} ready to create
+                      {bulkPendingCount > 0 && <span className="text-yellow-400 ml-2">• Fee: {bulkPendingCount * 10} XLM total</span>}
+                    </span>
+                  )}
+                </div>
+                <div className="flex items-center gap-3">
+                  <button
+                    onClick={() => { setShowBulkModal(false); resetBulkModal(); }}
+                    disabled={bulkProcessing}
+                    className="px-6 py-2 text-gray-400 hover:text-white transition-colors disabled:opacity-50"
+                  >
+                    {bulkSuccessCount === bulkEntries.length && bulkEntries.length > 0 ? 'Close' : 'Cancel'}
+                  </button>
+                  <button
+                    onClick={handleBulkProcessAll}
+                    disabled={bulkProcessing || bulkPendingCount === 0}
+                    className="px-6 py-3 bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-500 hover:to-pink-500 text-white font-semibold rounded-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                  >
+                    {bulkProcessing ? (
+                      <>
+                        <Loader2 className="w-5 h-5 animate-spin" />
+                        <span>Creating Proposals...</span>
+                      </>
+                    ) : (
+                      <span>Create {bulkPendingCount} Proposal{bulkPendingCount !== 1 ? 's' : ''}</span>
+                    )}
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
         </div>
