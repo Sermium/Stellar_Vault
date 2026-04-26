@@ -30,6 +30,105 @@ import ConnectWalletModal from './components/modals/ConnectWalletModal';
 import PublicVaultView from './components/views/PublicVaultView';
 import ClaimPage from './components/views/ClaimPage';
 
+// ==================== VAULT INDEX HELPERS ====================
+
+interface IndexedVault {
+  user_address: string;
+  vault_address: string;
+  role: string;
+  vault_name: string | null;
+  last_seen: string;
+}
+
+// Get cached vault addresses from Supabase index (FAST)
+const getIndexedUserVaults = async (publicKey: string): Promise<string[]> => {
+  if (!supabase) return [];
+  
+  try {
+    const { data, error } = await supabase
+      .from('user_vault_index')
+      .select('vault_address')
+      .eq('user_address', publicKey);
+    
+    if (error) {
+      console.log('Index lookup failed, will use blockchain:', error.message);
+      return [];
+    }
+    return data?.map(d => d.vault_address) || [];
+  } catch {
+    return [];
+  }
+};
+
+// Update the vault index when we discover vaults
+const updateVaultIndex = async (
+  publicKey: string, 
+  vaultAddress: string, 
+  role: string = 'signer',
+  vaultName?: string
+): Promise<void> => {
+  if (!supabase) return;
+  
+  try {
+    await supabase
+      .from('user_vault_index')
+      .upsert({
+        user_address: publicKey,
+        vault_address: vaultAddress,
+        role: role,
+        vault_name: vaultName || null,
+        last_seen: new Date().toISOString()
+      }, {
+        onConflict: 'user_address,vault_address'
+      });
+  } catch (err) {
+    console.error('Failed to update vault index:', err);
+  }
+};
+
+// Batch update vault index
+const batchUpdateVaultIndex = async (
+  publicKey: string,
+  vaults: Array<{ address: string; role: string; name?: string }>
+): Promise<void> => {
+  if (!supabase || vaults.length === 0) return;
+  
+  try {
+    const records = vaults.map(v => ({
+      user_address: publicKey,
+      vault_address: v.address,
+      role: v.role,
+      vault_name: v.name || null,
+      last_seen: new Date().toISOString()
+    }));
+    
+    await supabase
+      .from('user_vault_index')
+      .upsert(records, {
+        onConflict: 'user_address,vault_address'
+      });
+  } catch (err) {
+    console.error('Failed to batch update vault index:', err);
+  }
+};
+
+// Remove vault from index (when user leaves or vault is deleted)
+const removeFromVaultIndex = async (publicKey: string, vaultAddress: string): Promise<void> => {
+  if (!supabase) return;
+  
+  try {
+    await supabase
+      .from('user_vault_index')
+      .delete()
+      .eq('user_address', publicKey)
+      .eq('vault_address', vaultAddress);
+  } catch (err) {
+    console.error('Failed to remove from vault index:', err);
+  }
+};
+
+// ==================== END VAULT INDEX HELPERS ====================
+
 function App() {
   const vault = useStellarVault();
   const [isFactoryAdmin, setIsFactoryAdmin] = useState(false);
@@ -140,61 +239,148 @@ function App() {
   const loadUserVaults = async () => {
     if (!vault.publicKey) return;
     
-    console.log('=== loadUserVaults ===');
+    console.log('=== loadUserVaults (Optimized with Index) ===');
     console.log('publicKey:', vault.publicKey);
     setLoadingVaults(true);
     
     try {
-      const vaultInfos: VaultInfo[] = [];
-      const loadedAddresses = new Set<string>();
+      // STEP 1: Try to get cached vault addresses from Supabase index (FAST - ~50ms)
+      const indexedAddresses = await getIndexedUserVaults(vault.publicKey);
+      console.log('Indexed vault addresses:', indexedAddresses.length);
       
-      // Load vaults owned by user
-      const ownedVaults = await getVaultsByOwner(vault.publicKey);
-      console.log('ownedVaults:', ownedVaults);
-      for (const addr of ownedVaults) {
-        if (!loadedAddresses.has(addr)) {
-          console.log('Loading vault info for:', addr);
-          const info = await getVaultInfo(addr);
-          console.log('Vault info result:', info);
-          if (info) {
-            vaultInfos.push(info);
-            loadedAddresses.add(addr);
+      let vaultInfos: VaultInfo[] = [];
+      let needsFullRefresh = indexedAddresses.length === 0;
+      
+      // If we have indexed data, load those vaults first for instant UI
+      if (indexedAddresses.length > 0) {
+        console.log('Using indexed vaults for fast load...');
+        
+        // Load vault info in parallel
+        const vaultInfoResults = await Promise.allSettled(
+          indexedAddresses.map(addr => getVaultInfo(addr))
+        );
+        
+        vaultInfos = vaultInfoResults
+          .filter((result): result is PromiseFulfilledResult<VaultInfo | null> => 
+            result.status === 'fulfilled' && result.value !== null
+          )
+          .map(result => result.value as VaultInfo);
+        
+        console.log('Loaded from index:', vaultInfos.length, 'vaults');
+        
+        // Show indexed results immediately
+        if (vaultInfos.length > 0) {
+          setUserVaults(vaultInfos);
+          
+          // Auto-select vault from indexed data
+          if (!vault.vaultAddress && !showClaimPage) {
+            const savedVaultAddress = localStorage.getItem('selectedVaultAddress');
+            const vaultToSelect = savedVaultAddress && vaultInfos.some(v => v.vault_address === savedVaultAddress)
+              ? savedVaultAddress
+              : vaultInfos[0].vault_address;
+            console.log('Auto-selecting vault from index:', vaultToSelect);
+            vault.selectVault(vaultToSelect);
           }
         }
       }
       
-      // Load vaults where user is a signer (but not owner)
-      const signerVaults = await getVaultsBySigner(vault.publicKey);
-      console.log('signerVaults:', signerVaults);
-      for (const addr of signerVaults) {
-        if (!loadedAddresses.has(addr)) {
-          console.log('Loading signer vault info for:', addr);
-          const info = await getVaultInfo(addr);
-          console.log('Signer vault info result:', info);
-          if (info) {
-            vaultInfos.push(info);
-            loadedAddresses.add(addr);
+      // STEP 2: Refresh from blockchain in background (or immediately if no index)
+      // This ensures we catch any new vaults or removed access
+      const refreshFromBlockchain = async () => {
+        console.log('Refreshing from blockchain...');
+        
+        // Fetch owned and signer vault addresses in PARALLEL
+        const [ownedVaults, signerVaults] = await Promise.all([
+          getVaultsByOwner(vault.publicKey!),
+          getVaultsBySigner(vault.publicKey!)
+        ]);
+        
+        console.log('Blockchain - ownedVaults:', ownedVaults.length, 'signerVaults:', signerVaults.length);
+        
+        // Deduplicate addresses
+        const allAddresses = [...new Set([...ownedVaults, ...signerVaults])];
+        
+        // Check if we have new vaults not in index
+        const newAddresses = allAddresses.filter(addr => !indexedAddresses.includes(addr));
+        const removedAddresses = indexedAddresses.filter(addr => !allAddresses.includes(addr));
+        
+        if (newAddresses.length > 0 || removedAddresses.length > 0) {
+          console.log('Index out of date - new:', newAddresses.length, 'removed:', removedAddresses.length);
+          
+          // Fetch info for new vaults
+          if (newAddresses.length > 0) {
+            const newVaultResults = await Promise.allSettled(
+              newAddresses.map(addr => getVaultInfo(addr))
+            );
+            
+            const newVaultInfos = newVaultResults
+              .filter((result): result is PromiseFulfilledResult<VaultInfo | null> => 
+                result.status === 'fulfilled' && result.value !== null
+              )
+              .map(result => result.value as VaultInfo);
+            
+            // Merge with existing
+            vaultInfos = [...vaultInfos, ...newVaultInfos];
           }
+          
+          // Remove vaults user no longer has access to
+          if (removedAddresses.length > 0) {
+            vaultInfos = vaultInfos.filter(v => !removedAddresses.includes(v.vault_address));
+            
+            // Clean up index
+            for (const addr of removedAddresses) {
+              await removeFromVaultIndex(vault.publicKey!, addr);
+            }
+          }
+          
+          // Update UI with fresh data
+          setUserVaults(vaultInfos);
         }
+        
+        // Update the index with current vault list
+        const vaultsToIndex = allAddresses.map(addr => ({
+          address: addr,
+          role: ownedVaults.includes(addr) ? 'owner' : 'signer',
+          name: vaultInfos.find(v => v.vault_address === addr)?.name
+        }));
+        
+        await batchUpdateVaultIndex(vault.publicKey!, vaultsToIndex);
+        
+        return vaultInfos;
+      };
+      
+      // If no index, do full refresh and wait
+      if (needsFullRefresh) {
+        vaultInfos = await refreshFromBlockchain();
+        setUserVaults(vaultInfos);
+        
+        // Auto-select after full load
+        if (vaultInfos.length > 0 && !vault.vaultAddress && !showClaimPage) {
+          const savedVaultAddress = localStorage.getItem('selectedVaultAddress');
+          const vaultToSelect = savedVaultAddress && vaultInfos.some(v => v.vault_address === savedVaultAddress)
+            ? savedVaultAddress
+            : vaultInfos[0].vault_address;
+          console.log('Auto-selecting vault:', vaultToSelect);
+          vault.selectVault(vaultToSelect);
+        }
+      } else {
+        // Refresh in background (don't block UI)
+        refreshFromBlockchain().catch(err => {
+          console.error('Background refresh failed:', err);
+        });
       }
       
-      console.log('Total vaults loaded:', vaultInfos.length, vaultInfos);
-      setUserVaults(vaultInfos);
+      // STEP 3: Check beneficiary status in parallel
+      const beneficiaryCheckPromise = isBeneficiary(vault.publicKey);
       
-      // Check if user has any beneficiary locks (for sidebar button)
-      const isBeneficiaryUser = await isBeneficiary(vault.publicKey);
-      setHasBeneficiaryLocks(isBeneficiaryUser);
-
       // Handle URL vault parameter
       if (urlVaultParam) {
         const isSignerOnUrlVault = vaultInfos.some(v => v.vault_address === urlVaultParam);
         
         if (isSignerOnUrlVault) {
-          // User is signer on this vault - select it and show dashboard
           console.log('User is signer on URL vault, selecting:', urlVaultParam);
           vault.selectVault(urlVaultParam);
         } else {
-          // User is NOT a signer - check if they're a beneficiary on this vault
           console.log('User is not signer on URL vault, checking beneficiary status...');
           const isBeneficiaryOnUrlVault = await isBeneficiaryOnVault(urlVaultParam, vault.publicKey);
           
@@ -202,37 +388,22 @@ function App() {
             console.log('User is beneficiary on URL vault, showing claim page');
             setClaimVaultAddress(urlVaultParam);
             setShowClaimPage(true);
-            return; // Exit early - show claim page
-          } else {
-            console.log('User has no access to URL vault');
-            // Could show an error message here
+            setHasBeneficiaryLocks(await beneficiaryCheckPromise);
+            return;
           }
         }
       }
       
-      // Auto-select first vault if available and none selected (and not showing claim page)
-      if (vaultInfos.length > 0 && !vault.vaultAddress && !showClaimPage) {
-        const savedVaultAddress = localStorage.getItem('selectedVaultAddress');
-        const vaultToSelect = savedVaultAddress && vaultInfos.some(v => v.vault_address === savedVaultAddress)
-          ? savedVaultAddress
-          : vaultInfos[0].vault_address;
-        console.log('Auto-selecting vault:', vaultToSelect);
-        vault.selectVault(vaultToSelect);
+      // Check beneficiary status
+      const hasBeneficiaryLocksResult = await beneficiaryCheckPromise;
+      setHasBeneficiaryLocks(hasBeneficiaryLocksResult);
+      
+      // If no vaults and no URL param, check if should show claim page
+      if (vaultInfos.length === 0 && !urlVaultParam && hasBeneficiaryLocksResult) {
+        console.log('No vaults but is beneficiary, showing claim page');
+        setShowClaimPage(true);
       }
       
-      // If no vaults and no URL param, check if beneficiary globally
-      if (vaultInfos.length === 0 && !urlVaultParam) {
-        console.log('No vaults found, checking if beneficiary...');
-        console.log('Checking beneficiary for publicKey:', vault.publicKey);
-        const hasBeneficiaryLocks = await isBeneficiary(vault.publicKey);
-        console.log('isBeneficiary result:', hasBeneficiaryLocks);
-        if (hasBeneficiaryLocks) {
-          console.log('Setting showClaimPage to true');
-          setShowClaimPage(true);
-        } else {
-          console.log('No beneficiary locks found');
-        }
-      }
     } catch (err) {
       console.error('Failed to load vaults:', err);
     } finally {
@@ -257,6 +428,11 @@ function App() {
   }, [vault.publicKey]);
 
   const handleVaultCreated = async (vaultAddress: string) => {
+    // Add new vault to index immediately
+    if (vault.publicKey) {
+      await updateVaultIndex(vault.publicKey, vaultAddress, 'owner');
+    }
+    
     await loadUserVaults();
     vault.selectVault(vaultAddress);
     setActiveView('dashboard');
@@ -485,7 +661,6 @@ function App() {
                       onExecuteCancel={vault.executeCancel}
                       onNewTransaction={() => setShowNewTxModal(true)}
                       onRefreshProposals={() => vault.loadVaultData()}
-                      // Add these two new props for bulk transfers:
                       onCreateTransfer={async (recipient, token, amount) => {
                         await vault.propose(token, recipient, amount);
                       }}
